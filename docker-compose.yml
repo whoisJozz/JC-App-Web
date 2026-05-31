@@ -1,41 +1,31 @@
 version: '3.8'
 
 services:
+  backend:
+    build: .
+    container_name: jc_app_api
+    ports:
+      - "3000:3000"
+    volumes:
+      - .:/usr/src/app
+      - /usr/src/app/node_modules
+    environment:
+      - NODE_ENV=development
+    depends_on:
+      - db
+    command: npm run dev
+
   db:
     image: postgres:16-alpine
     container_name: jc_app_db
-    restart: unless-stopped
+    ports:
+      - "5432:5432"
     environment:
       POSTGRES_USER: admin_jc
       POSTGRES_PASSWORD: password_seguro_123
       POSTGRES_DB: jc_recompensas
-    ports:
-      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-    deploy:
-      resources:
-        limits:
-          cpus: '0.50'
-          memory: 512M
-
-  backend:
-    image: node:20-alpine
-    container_name: jc_app_api
-    restart: unless-stopped
-    working_dir: /app
-    volumes:
-      - .:/app
-    ports:
-      - "3000:3000"
-    command: npm run dev
-    depends_on:
-      - db
-    deploy:
-      resources:
-        limits:
-          cpus: '0.50'
-          memory: 512M
 
 volumes:
   pgdata:

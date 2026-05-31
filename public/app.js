@@ -7,7 +7,7 @@ const lectorQrDiv = document.getElementById('lector-qr');
 let idUsuarioEscaneado = null; 
 
 // ==========================================
-// 0. UX: Mostrar contraseña solo a admins
+// 0. CONTROL DE COMPORTAMIENTO (Contraseña Oculta)
 // ==========================================
 const inputUsername = document.getElementById('username');
 const inputPassword = document.getElementById('password');
@@ -18,21 +18,19 @@ inputUsername.addEventListener('input', () => {
         inputPassword.classList.remove('hidden');
     } else {
         inputPassword.classList.add('hidden');
-        inputPassword.value = ''; // Limpiar por seguridad
+        inputPassword.value = ''; 
     }
 });
 
 // ==========================================
-// 1. LOGIN SEGURO
+// 1. CONTROL DE ACCESO HTTP REST
 // ==========================================
 document.getElementById('btn-entrar').addEventListener('click', async () => {
     const username = inputUsername.value.trim().toLowerCase();
     const password = inputPassword.value.trim();
     
-    // Validación 1: Nadie entra sin nombre
     if (username === '') return alert("Por favor, ingresa tu usuario.");
 
-    // Validación 2: Si es admin, es OBLIGATORIO tener contraseña
     if ((username === 'admin' || username === 'admin_general') && password === '') {
         return alert("Por favor, ingresa la contraseña de administrador.");
     }
@@ -73,7 +71,7 @@ document.getElementById('btn-entrar').addEventListener('click', async () => {
 });
 
 // ==========================================
-// 2. GENERAR QR (USUARIO)
+// 2. GENERADOR DE MATRIZ DE CÓDIGO QR
 // ==========================================
 function generarQRUsuario(username) {
     const qrContenedor = document.getElementById('qr-contenedor');
@@ -92,7 +90,7 @@ function generarQRUsuario(username) {
 }
 
 // ==========================================
-// 3. ESCANER (ADMIN)
+// 3. CAPTURA Y ESCANEO DE VIDEO NATIVO
 // ==========================================
 function iniciarEscanerAdmin() {
     const html5QrCode = new Html5Qrcode("lector-qr");
@@ -107,7 +105,7 @@ function iniciarEscanerAdmin() {
             
             try {
                 const datos = JSON.parse(textoDecodificado);
-                if (!datos.id_usuario) throw new Error("QR sin ID");
+                if (!datos.id_usuario) throw new Error("Estructura inválida");
                 
                 idUsuarioEscaneado = datos.id_usuario;
                 document.getElementById('usuario-detectado').innerText = `Calificando a: ${idUsuarioEscaneado}`;
@@ -118,14 +116,14 @@ function iniciarEscanerAdmin() {
                 iniciarEscanerAdmin();
             }
         },
-        (error) => { /* Ignorar errores de enfoque de cámara */ }
+        (error) => { /* Captura de foco cíclico de cámara */ }
     ).catch(err => {
-        console.error("Error de cámara", err);
+        console.error("Fallo de inicialización multimedia", err);
     });
 }
 
 // ==========================================
-// 4. GUARDAR PUNTOS EN BASE DE DATOS
+// 4. PERSISTENCIA TRANSACCIONAL
 // ==========================================
 document.getElementById('btn-guardar-puntos').addEventListener('click', async () => {
     let puntosTotales = 0;
@@ -160,12 +158,11 @@ document.getElementById('btn-guardar-puntos').addEventListener('click', async ()
         alert("Error de conexión con el servidor.");
     }
 
-    // Reiniciar para el siguiente usuario
-    btn.innerText = "Guardar Puntos";
-    btn.disabled = false;
     formularioPuntos.classList.add('hidden');
     lectorQrDiv.classList.remove('hidden');
     document.querySelectorAll('#formulario-puntos input[type="checkbox"]').forEach(chk => chk.checked = false);
+    btn.innerText = "Guardar Puntos";
+    btn.disabled = false;
     
     iniciarEscanerAdmin();
 });
