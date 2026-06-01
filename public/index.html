@@ -10,60 +10,92 @@
 </head>
 <body class="bg-gray-100 text-gray-800 font-sans min-h-screen flex items-center justify-center p-4">
     
-    <div class="bg-white p-8 rounded-xl shadow-lg w-full max-w-md text-center">
+    <div class="bg-white p-6 rounded-xl shadow-lg w-full max-w-md text-center">
         
-        <div id="pantalla-login">
-            <h1 class="text-3xl font-bold text-blue-600 mb-2">JC App</h1>
-            <p class="text-gray-500 mb-6">Ingresa a tu cuenta</p>
-            <input type="text" id="username" placeholder="Usuario" class="w-full border p-3 rounded mb-4 focus:outline-blue-500">
-            <input type="password" id="password" placeholder="Contraseña de Administrador" class="w-full border p-3 rounded mb-4 focus:outline-blue-500 hidden">
-            <button id="btn-entrar" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded w-full transition">
-                Entrar
-            </button>
+        <div id="contenedor-acceso">
+            <div id="pantalla-login">
+                <h1 class="text-3xl font-bold text-blue-600 mb-2">JC App</h1>
+                <p class="text-gray-500 mb-6">Ingresa a tu cuenta</p>
+                <input type="text" id="login-username" placeholder="Teléfono a 10 dígitos" class="w-full border p-3 rounded mb-4 focus:outline-blue-500">
+                <input type="password" id="login-password" placeholder="Contraseña" class="w-full border p-3 rounded mb-4 focus:outline-blue-500">
+                <button id="btn-entrar" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded w-full transition mb-4">Entrar</button>
+                <p class="text-sm text-gray-600">¿No tienes cuenta? <a href="#" id="link-registro" class="text-blue-600 font-bold hover:underline">Regístrate aquí</a></p>
+            </div>
+
+            <div id="pantalla-registro" class="hidden">
+                <h1 class="text-3xl font-bold text-blue-600 mb-2">Nuevo Registro</h1>
+                <p class="text-gray-500 mb-6">Crea tu pase de lista</p>
+                <input type="tel" id="reg-telefono" placeholder="Número de Teléfono (10 dígitos)" maxlength="10" class="w-full border p-3 rounded mb-4 focus:outline-blue-500">
+                <input type="text" id="reg-nombre" placeholder="Nombre y Apellido" class="w-full border p-3 rounded mb-4 focus:outline-blue-500">
+                <input type="password" id="reg-password" placeholder="Crea una Contraseña" class="w-full border p-3 rounded mb-4 focus:outline-blue-500">
+                <button id="btn-registrar" class="bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-4 rounded w-full transition mb-4">Crear Cuenta</button>
+                <p class="text-sm text-gray-600">¿Ya tienes cuenta? <a href="#" id="link-login" class="text-blue-600 font-bold hover:underline">Inicia Sesión</a></p>
+            </div>
         </div>
 
         <div id="pantalla-usuario" class="hidden">
             <h2 class="text-2xl font-bold text-gray-700 mb-2">Tu Pase de Lista</h2>
-            <p class="text-gray-500 mb-6">Muestra este código al administrador</p>
-            <div id="qr-contenedor" class="flex justify-center mb-6 p-4 bg-white border-4 border-blue-100 rounded-lg"></div>
-            <p class="text-xl font-bold text-blue-600">ID: <span id="nombre-usuario">...</span></p>
-        </div>
+            <div id="qr-contenedor" class="flex justify-center mb-4 p-4 bg-white border-4 border-blue-100 rounded-lg"></div>
+            <p class="text-lg font-bold text-blue-600 mb-4">Tel: <span id="nombre-usuario">...</span></p>
 
-        <div id="pantalla-admin" class="hidden">
-            <h2 class="text-2xl font-bold text-gray-700 mb-4">Panel de Escaneo</h2>
-            
-            <div id="lector-qr" class="w-full rounded overflow-hidden mb-4 border-2 border-gray-300"></div>
-            
-            <div id="formulario-puntos" class="hidden text-left bg-gray-50 p-4 rounded-lg border">
-                <p id="usuario-detectado" class="font-bold text-blue-600 text-lg mb-4 text-center">Usuario detectado</p>
-                
-                <div class="space-y-3 mb-6">
-                    <label class="flex items-center space-x-3 cursor-pointer">
-                        <input type="checkbox" value="5" class="w-5 h-5 text-blue-600">
-                        <span class="text-gray-700">Asistencia (+5 pts)</span>
-                    </label>
-                    <label class="flex items-center space-x-3 cursor-pointer">
-                        <input type="checkbox" value="5" class="w-5 h-5 text-blue-600">
-                        <span class="text-gray-700">Trajo Biblia (+5 pts)</span>
-                    </label>
-                    <label class="flex items-center space-x-3 cursor-pointer">
-                        <input type="checkbox" value="10" class="w-5 h-5 text-blue-600">
-                        <span class="text-gray-700">Llegó Temprano (+10 pts)</span>
-                    </label>
-                    <label class="flex items-center space-x-3 cursor-pointer">
-                        <input type="checkbox" value="10" class="w-5 h-5 text-blue-600">
-                        <span class="text-gray-700">Trajo Invitado (+10 pts)</span>
-                    </label>
-                </div>
-                
-                <button id="btn-guardar-puntos" class="bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-4 rounded w-full transition">
-                    Guardar Puntos
+            <div class="p-4 bg-green-50 rounded-lg border border-green-200">
+                <p class="text-sm text-gray-500 uppercase tracking-wide font-bold">Saldo Actual</p>
+                <p class="text-4xl font-bold text-green-600 my-1"><span id="saldo-usuario">0</span> <span class="text-lg">pts</span></p>
+                <p class="text-sm text-green-800 font-semibold bg-green-200 inline-block px-3 py-1 rounded-full mb-3">Equivale a: $<span id="saldo-mxn">0.00</span> MXN</p>
+                <button id="btn-actualizar-saldo" class="w-full py-2 border border-green-300 text-green-700 font-bold rounded hover:bg-green-100 transition">
+                     Refrescar Saldo
                 </button>
             </div>
         </div>
 
-    </div>
+        <div id="pantalla-admin" class="hidden">
+            <div class="flex justify-center space-x-6 mb-6 border-b pb-2">
+                <button id="tab-scanner" class="text-blue-600 font-bold border-b-2 border-blue-600 pb-1 px-2 focus:outline-none">Pase de Lista</button>
+                <button id="tab-usuarios" class="text-gray-500 font-bold pb-1 px-2 hover:text-blue-600 focus:outline-none">Usuarios y Puntos</button>
+            </div>
+            
+            <div id="seccion-admin-scanner">
+                <div id="lector-qr" class="w-full rounded overflow-hidden mb-4 border-2 border-gray-300"></div>
+                
+                <div id="formulario-puntos" class="hidden text-left bg-gray-50 p-4 rounded-lg border shadow-inner">
+                    <p id="usuario-detectado" class="font-bold text-blue-800 text-lg mb-2 text-center border-b pb-2">Calificando a: ...</p>
+                    
+                    <div class="space-y-3 mb-4">
+                        <label class="flex items-center space-x-3 cursor-pointer"><input type="checkbox" value="5" class="w-5 h-5 text-blue-600"><span class="text-gray-700 font-medium">Asistencia (+5 pts)</span></label>
+                        <label class="flex items-center space-x-3 cursor-pointer"><input type="checkbox" value="5" class="w-5 h-5 text-blue-600"><span class="text-gray-700 font-medium">Trajo Biblia (+5 pts)</span></label>
+                        <label class="flex items-center space-x-3 cursor-pointer"><input type="checkbox" value="10" class="w-5 h-5 text-blue-600"><span class="text-gray-700 font-medium">Llegó Temprano (+10 pts)</span></label>
+                        <label class="flex items-center space-x-3 cursor-pointer"><input type="checkbox" value="10" class="w-5 h-5 text-blue-600"><span class="text-gray-700 font-medium">Trajo Invitado (+10 pts)</span></label>
+                    </div>
+                    <button id="btn-guardar-puntos" class="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded w-full transition mb-4">Dar Recompensas</button>
 
+                    <div class="border-t border-gray-300 pt-4 mt-2">
+                        <h3 class="font-bold text-red-600 mb-1"> Canjear en Churranga</h3>
+                        <p class="text-xs text-gray-500 mb-3">Saldo disponible: <span id="admin-saldo-usuario" class="font-bold text-gray-800">0</span> pts ($<span id="admin-saldo-mxn">0.00</span>)</p>
+                        
+                        <div class="flex space-x-2">
+                            <input type="number" id="input-canje" placeholder="Puntos a restar" min="1" class="w-full border border-red-300 p-2 rounded focus:outline-red-500">
+                            <button id="btn-canjear-puntos" class="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded transition">Cobrar</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="seccion-admin-usuarios" class="hidden text-left">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-xl font-bold text-gray-700">Lista General</h2>
+                    <span id="badge-total-usuarios" class="bg-blue-100 text-blue-800 text-xs font-bold px-2.5 py-1 rounded-full">0 Usuarios</span>
+                </div>
+                <div class="overflow-x-auto max-h-96 overflow-y-auto border rounded-lg shadow-sm">
+                    <table class="w-full text-sm text-left text-gray-500 bg-white">
+                        <thead class="text-xs text-gray-700 uppercase bg-gray-100 sticky top-0">
+                            <tr><th class="px-3 py-3">Usuario / Puntos</th><th class="px-3 py-3 text-center">Soporte</th></tr>
+                        </thead>
+                        <tbody id="tabla-usuarios-cuerpo"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
     <script src="app.js"></script>
 </body>
 </html>

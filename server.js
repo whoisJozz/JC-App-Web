@@ -11,12 +11,6 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Configuración de BD y Diagnóstico Inicial de Variables de Entorno
-console.log("🔍 DIAGNÓSTICO DE VARIABLES:");
-console.log("Usuario:", process.env.DB_USER);
-console.log("Host:", process.env.DB_HOST);
-console.log("Base de datos:", process.env.DB_NAME);
-
 const pool = new Pool({
     user: process.env.DB_USER,
     host: process.env.DB_HOST,
@@ -25,77 +19,80 @@ const pool = new Pool({
     port: process.env.DB_PORT,
 });
 
-pool.connect((err, client, release) => {
+pool.connect((err) => {
     if (err) return console.error('Error conectando a PostgreSQL ❌:', err.message);
-    console.log('¡Conexión exitosa a la base de datos PostgreSQL! 🚀');
-    release();
+    console.log('¡Conexión a BD Exitosa! 🚀');
 });
 
-// ==========================================
-// ENRUTAMIENTO Y LOGICA REST
-// ==========================================
+// 1. REGISTRO
+app.post('/api/registro', async (req, res) => {
+    const { telefono, nombre, password } = req.body;
+    try {
+        const existe = await pool.query('SELECT id FROM usuarios WHERE username = $1', [telefono]);
+        if (existe.rows.length > 0) return res.status(400).json({ success: false, error: "Teléfono ya registrado." });
+        const newUser = await pool.query('INSERT INTO usuarios (username, nombre_completo, rol, password_hash) VALUES ($1, $2, $3, $4) RETURNING id, username, rol', [telefono, nombre, 'usuario', password]);
+        res.status(201).json({ success: true, usuario: newUser.rows[0] });
+    } catch (err) { res.status(500).json({ error: "Error del servidor." }); }
+});
 
-// 1. Login Inteligente (Fricción cero para usuarios / Validación estricta para admins)
+// 2. LOGIN
 app.post('/api/login', async (req, res) => {
     const { username, password } = req.body;
-
     try {
         const userResult = await pool.query('SELECT id, username, rol, password_hash FROM usuarios WHERE username = $1', [username]);
-
-        if (userResult.rows.length === 0) {
-            // Alta automática si el usuario regular no existe en el sistema
-            const newUser = await pool.query(
-                'INSERT INTO usuarios (username, nombre_completo, rol, password_hash) VALUES ($1, $2, $3, $4) RETURNING id, username, rol',
-                [username, username, 'usuario', '']
-            );
-            return res.json({ success: true, usuario: newUser.rows[0] });
-        }
-
-        const usuario = userResult.rows[0];
-
-        if (usuario.rol === 'admin') {
-            if (password === usuario.password_hash) {
-                return res.json({ success: true, usuario: { id: usuario.id, username: usuario.username, rol: usuario.rol } });
-            } else {
-                return res.status(401).json({ success: false, error: "Contraseña de administrador incorrecta." });
-            }
-        } else {
-            return res.json({ success: true, usuario: { id: usuario.id, username: usuario.username, rol: usuario.rol } });
-        }
-
-    } catch (err) {
-        console.error("Error crítico en login:", err);
-        res.status(500).json({ error: "Error interno del servidor." });
-    }
+        if (userResult.rows.length === 0) return res.status(404).json({ success: false, error: "Usuario no encontrado." });
+        if (password === userResult.rows[0].password_hash) {
+            return res.json({ success: true, usuario: { id: userResult.rows[0].id, username: userResult.rows[0].username, rol: userResult.rows[0].rol } });
+        } else return res.status(401).json({ success: false, error: "Contraseña incorrecta." });
+    } catch (err) { res.status(500).json({ error: "Error del servidor." }); }
 });
 
-// 2. Transacciones (Captura automática de puntos mediante trigger)
+// 3. CONSULTAR SALDO INDIVIDUAL
+app.get('/api/usuarios/:username', async (req, res) => {
+    try {
+        const result = await pool.query('SELECT puntos_totales FROM usuarios WHERE username = $1', [req.params.username]);
+        if (result.rows.length === 0) return res.status(404).json({ error: "No encontrado" });
+        res.json({ puntos: result.rows[0].puntos_totales });
+    } catch (err) { res.status(500).json({ error: "Error del servidor" }); }
+});
+
+// 4. TRANSACCIONES (Sumar o Canjear)
 app.post('/api/transacciones', async (req, res) => {
-    const { username, puntos } = req.body;
+    const { username, puntos, concepto } = req.body;
     try {
         const userResult = await pool.query('SELECT id FROM usuarios WHERE username = $1', [username]);
-        let usuarioId;
-
-        if (userResult.rows.length === 0) {
-            const newUser = await pool.query(
-                'INSERT INTO usuarios (username, nombre_completo, password_hash) VALUES ($1, $2, $3) RETURNING id',
-                [username, username, ''] 
-            );
-            usuarioId = newUser.rows[0].id;
-        } else {
-            usuarioId = userResult.rows[0].id;
-        }
+        if (userResult.rows.length === 0) return res.status(404).json({ error: "Usuario no existe." });
 
         await pool.query(
             'INSERT INTO transacciones (usuario_id, concepto, cantidad_puntos) VALUES ($1, $2, $3)',
-            [usuarioId, 'Escaneo QR (Admin)', puntos]
+            [userResult.rows[0].id, concepto, puntos]
         );
-        res.status(201).json({ mensaje: "Transacción e inserción completada exitosamente." });
+        
+        const accion = puntos > 0 ? "sumados" : "descontados";
+        res.status(201).json({ mensaje: `${Math.abs(puntos)} puntos ${accion} correctamente.` });
     } catch (err) {
+        // Atrapamos la protección CHECK (puntos_totales >= 0) de la BD
+        if (err.message.includes('violates check constraint')) {
+            return res.status(400).json({ error: "Saldo insuficiente para realizar este canje." });
+        }
         res.status(500).json({ error: err.message });
     }
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Servidor de JC App corriendo en http://localhost:${PORT}`);
+// 5. LISTADO DE ADMIN
+app.get('/api/usuarios', async (req, res) => {
+    try {
+        const result = await pool.query("SELECT username, nombre_completo, puntos_totales FROM usuarios WHERE rol = 'usuario' ORDER BY puntos_totales DESC");
+        res.json(result.rows);
+    } catch (err) { res.status(500).json({ error: "Error de servidor." }); }
 });
+
+// 6. RESET PASSWORD
+app.post('/api/usuarios/reset-password', async (req, res) => {
+    try {
+        await pool.query("UPDATE usuarios SET password_hash = $1 WHERE username = $2 AND rol = 'usuario'", ['1234', req.body.username]);
+        res.json({ success: true });
+    } catch (err) { res.status(500).json({ error: "Error." }); }
+});
+
+app.listen(PORT, '0.0.0.0', () => { console.log(`Servidor de JC App corriendo en http://localhost:${PORT}`); });
