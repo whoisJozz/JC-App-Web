@@ -162,7 +162,7 @@ async function enviarTransaccion(puntos, concepto, btnId) {
             alert(data.mensaje);
         } else {
             // Aquí salta el error de la Base de Datos si no tienen puntos suficientes
-            alert("❌ Error: " + data.error); 
+            alert("Error: " + data.error); 
         }
     } catch (error) { alert("Error de red."); }
 
@@ -180,7 +180,7 @@ document.getElementById('btn-guardar-puntos').addEventListener('click', () => {
     enviarTransaccion(puntosTotales, 'Ganancia por Asistencia', 'btn-guardar-puntos');
 });
 
-// Botón B: Descontar por Canje (Tostitos)
+// Botón B: Descontar por Canje 
 document.getElementById('btn-canjear-puntos').addEventListener('click', () => {
     const puntosDescontar = parseInt(document.getElementById('input-canje').value);
     if (isNaN(puntosDescontar) || puntosDescontar <= 0) return alert("Ingresa una cantidad válida a descontar.");

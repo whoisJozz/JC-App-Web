@@ -20,8 +20,8 @@ const pool = new Pool({
 });
 
 pool.connect((err) => {
-    if (err) return console.error('Error conectando a PostgreSQL ❌:', err.message);
-    console.log('¡Conexión a BD Exitosa! 🚀');
+    if (err) return console.error('Error conectando a PostgreSQL :', err.message);
+    console.log('¡Conexión a BD Exitosa! ');
 });
 
 // 1. REGISTRO

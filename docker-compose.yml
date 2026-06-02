@@ -1,31 +1,40 @@
 version: '3.8'
 
 services:
-  backend:
-    build: .
-    container_name: jc_app_api
-    ports:
-      - "3000:3000"
-    volumes:
-      - .:/usr/src/app
-      - /usr/src/app/node_modules
-    environment:
-      - NODE_ENV=development
-    depends_on:
-      - db
-    command: npm run dev
-
   db:
     image: postgres:16-alpine
     container_name: jc_app_db
-    ports:
-      - "5432:5432"
     environment:
       POSTGRES_USER: admin_jc
       POSTGRES_PASSWORD: password_seguro_123
       POSTGRES_DB: jc_recompensas
+    ports:
+      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      # LÍNEA MÁGICA: Inyecta el script SQL automáticamente al iniciar por primera vez
+      - ./db-init:/docker-entrypoint-initdb.d
+    networks:
+      - jc_network
+
+  backend:
+    build: .
+    container_name: jc-app-backend
+    ports:
+      - "3000:3000"
+    environment:
+      DB_USER: admin_jc
+      DB_PASSWORD: password_seguro_123
+      DB_HOST: db
+      DB_NAME: jc_recompensas
+      DB_PORT: 5432
+    depends_on:
+      - db
+    networks:
+      - jc_network
 
 volumes:
   pgdata:
+
+networks:
+  jc_network:
