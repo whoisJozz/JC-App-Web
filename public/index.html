@@ -17,7 +17,14 @@
                 <h1 class="text-3xl font-bold text-blue-600 mb-2">JC App</h1>
                 <p class="text-gray-500 mb-6">Ingresa a tu cuenta</p>
                 <input type="text" id="login-username" placeholder="Teléfono a 10 dígitos" class="w-full border p-3 rounded mb-4 focus:outline-blue-500">
-                <input type="password" id="login-password" placeholder="Contraseña" class="w-full border p-3 rounded mb-4 focus:outline-blue-500">
+                
+                <div class="relative w-full mb-4">
+                    <input type="password" id="login-password" placeholder="Contraseña" class="w-full border p-3 rounded focus:outline-blue-500 pr-10">
+                    <button type="button" id="toggle-login-password" class="absolute inset-y-0 right-0 px-3 flex items-center text-gray-500 hover:text-gray-700 focus:outline-none text-xl">
+                        👁️
+                    </button>
+                </div>
+
                 <button id="btn-entrar" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded w-full transition mb-4">Entrar</button>
                 <p class="text-sm text-gray-600">¿No tienes cuenta? <a href="#" id="link-registro" class="text-blue-600 font-bold hover:underline">Regístrate aquí</a></p>
             </div>
@@ -27,7 +34,14 @@
                 <p class="text-gray-500 mb-6">Crea tu pase de lista</p>
                 <input type="tel" id="reg-telefono" placeholder="Número de Teléfono (10 dígitos)" maxlength="10" class="w-full border p-3 rounded mb-4 focus:outline-blue-500">
                 <input type="text" id="reg-nombre" placeholder="Nombre y Apellido" class="w-full border p-3 rounded mb-4 focus:outline-blue-500">
-                <input type="password" id="reg-password" placeholder="Crea una Contraseña" class="w-full border p-3 rounded mb-4 focus:outline-blue-500">
+                
+                <div class="relative w-full mb-4">
+                    <input type="password" id="reg-password" placeholder="Crea una Contraseña" class="w-full border p-3 rounded focus:outline-blue-500 pr-10">
+                    <button type="button" id="toggle-reg-password" class="absolute inset-y-0 right-0 px-3 flex items-center text-gray-500 hover:text-gray-700 focus:outline-none text-xl">
+                        👁️
+                    </button>
+                </div>
+
                 <button id="btn-registrar" class="bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-4 rounded w-full transition mb-4">Crear Cuenta</button>
                 <p class="text-sm text-gray-600">¿Ya tienes cuenta? <a href="#" id="link-login" class="text-blue-600 font-bold hover:underline">Inicia Sesión</a></p>
             </div>

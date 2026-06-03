@@ -1,8 +1,4 @@
--- ==========================================
--- ARCHIVO DE AUTO-SEMBRADO DE LA BASE DE DATOS
--- ==========================================
 
--- 1. Crear tabla de usuarios si no existe
 CREATE TABLE IF NOT EXISTS usuarios (
     id SERIAL PRIMARY KEY,
     username VARCHAR(50) UNIQUE NOT NULL,
@@ -21,9 +17,12 @@ CREATE TABLE IF NOT EXISTS transacciones (
     fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 3. Insertar al Administrador Principal por defecto (Evita duplicados con ON CONFLICT)
+-- 3. Insertar a los Administradores (General y Staff Dividido)
 INSERT INTO usuarios (username, password_hash, nombre_completo, rol, puntos_totales)
-VALUES ('admin_general', '12345', 'Administrador Principal', 'admin', 0)
+VALUES 
+    ('admin_general', 'ElOzO2004', 'Administrador Principal', 'admin', 0),
+    ('admin_hombres', 'soyadmin_hombre', 'Admin Staffsito Hombres', 'admin', 0),
+    ('admin_mujeres', 'soyadmin_mujer', 'Admin Staffsita Mujeres', 'admin', 0)
 ON CONFLICT (username) DO NOTHING;
 
 -- 4. Crear la función del Trigger para actualizar puntos y saldos en tiempo real

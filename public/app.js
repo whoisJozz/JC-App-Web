@@ -211,3 +211,29 @@ async function resetearPassword(username) {
         if (res.ok) { alert("Clave reestablecida a: 1234"); cargarUsuariosAdmin(); }
     } catch (e) { alert("Error de red."); }
 }
+
+// 7. UX: BOTONES MOSTRAR CONTRASEÑA
+document.addEventListener('DOMContentLoaded', () => {
+    
+    // Toggle para Login
+    const toggleLogin = document.getElementById('toggle-login-password');
+    const passLogin = document.getElementById('login-password');
+    if (toggleLogin && passLogin) {
+        toggleLogin.addEventListener('click', function () {
+            const type = passLogin.getAttribute('type') === 'password' ? 'text' : 'password';
+            passLogin.setAttribute('type', type);
+            this.textContent = type === 'password' ? '👁️' : '🙈';
+        });
+    }
+
+    // Toggle para Registro
+    const toggleReg = document.getElementById('toggle-reg-password');
+    const passReg = document.getElementById('reg-password');
+    if (toggleReg && passReg) {
+        toggleReg.addEventListener('click', function () {
+            const type = passReg.getAttribute('type') === 'password' ? 'text' : 'password';
+            passReg.setAttribute('type', type);
+            this.textContent = type === 'password' ? '👁️' : '🙈';
+        });
+    }
+});
