@@ -1,15 +1,16 @@
 @echo off
 color 0A
-title JC App - Iniciar Servidor (Modo Offline)
+title JC App - Iniciar Servidor
 echo ==========================================
-echo        DESPERTANDO SERVICIOS DE JC APP
+echo        ENCENDIENDO MOTORES DE JC APP
 echo ==========================================
 echo.
-echo Iniciando contenedores guardados en memoria...
+echo Levantando Base de Datos y Servidor Node.js...
 echo.
-docker-compose up -d
+docker-compose up --build -d
 echo.
 echo ==========================================
-echo ¡SISTEMA EN LINEA Y LISTO PARA EL CAMPAMENTO!
+echo ¡SISTEMA EN LINEA Y CONGELADO EN SEGUNDO PLANO!
+echo Ya puedes cerrar esta ventana y abrir tu script de Pinggy.
 echo ==========================================
 pause
