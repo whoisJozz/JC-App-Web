@@ -1,3 +1,11 @@
+// Interceptor global de errores (QA Debugging Offline)
+window.onerror = function(message, source, lineno, colno, error) {
+    alert(` ERROR FATAL iOS:\nMsg: ${message}\nLínea: ${lineno}`);
+    return true; 
+};
+window.addEventListener("unhandledrejection", function(promiseRejectionEvent) {
+    alert(` PROMESA RECHAZADA iOS:\n${promiseRejectionEvent.reason}`);
+});
 const contenedorAcceso = document.getElementById('contenedor-acceso');
 const pantallaLogin = document.getElementById('pantalla-login');
 const pantallaRegistro = document.getElementById('pantalla-registro');
@@ -188,6 +196,25 @@ document.getElementById('btn-canjear-puntos').addEventListener('click', () => {
     // Le mandamos los puntos en NEGATIVO al backend
     enviarTransaccion(-Math.abs(puntosDescontar), 'Canje en Tienda', 'btn-canjear-puntos');
 });
+
+// Botón C: Puntos Manuales (Nuevo Requerimiento)
+const btnManualPuntos = document.getElementById('btn-manual-puntos');
+if(btnManualPuntos) {
+    btnManualPuntos.addEventListener('click', () => {
+        const puntosExtra = parseInt(document.getElementById('input-puntos-manual').value);
+        const conceptoExtra = document.getElementById('input-concepto-manual').value.trim();
+
+        if (isNaN(puntosExtra) || puntosExtra === 0) return alert("⚠️ Ingresa una cantidad válida de puntos.");
+        if (!conceptoExtra) return alert("⚠️ Ingresa un motivo o concepto para la transacción.");
+
+        // Reutilizamos tu función mágica enviarTransaccion
+        enviarTransaccion(puntosExtra, conceptoExtra, 'btn-manual-puntos');
+        
+        // Limpiamos los campos después de enviar
+        document.getElementById('input-puntos-manual').value = '';
+        document.getElementById('input-concepto-manual').value = '';
+    });
+}
 
 // 6. ADMIN - LISTA Y RESET
 async function cargarUsuariosAdmin() {

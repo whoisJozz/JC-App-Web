@@ -22,6 +22,7 @@ services:
     container_name: jc-app-backend
     ports:
       - "3000:3000"
+      - "3443:3443"
     environment:
       DB_USER: admin_jc
       DB_PASSWORD: password_seguro_123

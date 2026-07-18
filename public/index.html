@@ -4,9 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>JC App - Recompensas</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+    <!-- Ahora las dependencias viven en tu Docker local -->
+    <script src="tailwind.js"></script>
+    <script src="qrcode.js"></script>
+    <script src="html5-qrcode.js"></script>
 </head>
 <body class="bg-gray-100 text-gray-800 font-sans min-h-screen flex items-center justify-center p-4">
     
@@ -81,11 +82,27 @@
                         <label class="flex items-center space-x-3 cursor-pointer"><input type="checkbox" value="10" class="w-5 h-5 text-blue-600"><span class="text-gray-700 font-medium">Trajo Invitado (+10 pts)</span></label>
                     </div>
                     <button id="btn-guardar-puntos" class="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded w-full transition mb-4">Dar Recompensas</button>
-
+                    <div class="border-t border-gray-300 pt-4 mb-4 mt-4">
+                        <h3 class="font-bold text-blue-800 mb-2 text-center">Asignación Manual Extra</h3>
+                        <div class="flex flex-col space-y-3">
+                            <input type="number" id="input-puntos-manual" placeholder="Pts (ej: 20 o -15)" class="w-full border border-blue-300 p-2 rounded focus:outline-blue-500">
+                            <input type="text" id="input-concepto-manual" placeholder="Motivo (ej: Ganó dinámica)" class="w-full border border-blue-300 p-2 rounded focus:outline-blue-500">
+                            <button id="btn-manual-puntos" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded w-full transition">Otorgar Puntos Extra</button>
+                        </div>
+                    </div>
                     <div class="border-t border-gray-300 pt-4 mt-2">
                         <h3 class="font-bold text-red-600 mb-1"> Canjear en Churranga</h3>
                         <p class="text-xs text-gray-500 mb-3">Saldo disponible: <span id="admin-saldo-usuario" class="font-bold text-gray-800">0</span> pts ($<span id="admin-saldo-mxn">0.00</span>)</p>
                         
+                        <div class="border-t border-gray-300 pt-4 mb-4 mt-4">
+                        <h3 class="font-bold text-blue-800 mb-2 text-center">Asignación Manual Extra</h3>
+                        <div class="flex flex-col space-y-3">
+                            <input type="number" id="input-puntos-manual" placeholder="Pts (ej: 20 o -10)" class="w-full border border-blue-300 p-2 rounded focus:outline-blue-500">
+                            <input type="text" id="input-concepto-manual" placeholder="Motivo (ej: Ganó dinámica)" class="w-full border border-blue-300 p-2 rounded focus:outline-blue-500">
+                            <button id="btn-manual-puntos" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded w-full transition">Otorgar Puntos Extra</button>
+                        </div>
+                    </div>
+
                         <div class="flex space-x-2">
                             <input type="number" id="input-canje" placeholder="Puntos a restar" min="1" class="w-full border border-red-300 p-2 rounded focus:outline-red-500">
                             <button id="btn-canjear-puntos" class="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded transition">Cobrar</button>
