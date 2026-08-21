@@ -26,9 +26,9 @@ const pool = new Pool({
 
 pool.connect((err) => {
     if (err) {
-        console.error('⚠️ Advertencia: Conexión inicial a PostgreSQL fallida. Se reintentará en cada consulta:', err.message);
+        console.error(' Advertencia: Conexión inicial a PostgreSQL fallida. Se reintentará en cada consulta:', err.message);
     } else {
-        console.log('✅ ¡Conexión inicial a BD Exitosa!');
+        console.log(' ¡Conexión inicial a BD Exitosa!');
     }
 });
 
@@ -101,7 +101,7 @@ app.post('/api/usuarios/reset-password', async (req, res) => {
 
 // Puerta 1: HTTP estándar para visualización y consultas comunes (Puerto 3000)
 http.createServer(app).listen(PORT_HTTP, '0.0.0.0', () => { 
-    console.log(`🌐 Servidor HTTP corriendo en http://0.0.0.0:${PORT_HTTP}`); 
+    console.log(` Servidor HTTP corriendo en http://0.0.0.0:${PORT_HTTP}`); 
 });
 
 // Puerta 2: HTTPS encriptado para habilitar hardware de cámara nativa (Puerto 3443)
