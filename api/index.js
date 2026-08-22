@@ -24,8 +24,51 @@ const JWT_EXPIRES_IN = '12h';
 const JWT_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 const BCRYPT_ROUNDS = 12;
 const MAX_TRANSACTION_POINTS = 10000;
-const appOrigin = process.env.ALLOWED_ORIGIN;
 const FALLBACK_VERSE = 'Todo lo puedo en Cristo que me fortalece. — Filipenses 4:13';
+
+function normalizeOrigin(value, defaultProtocol = 'https:') {
+    if (!value) return null;
+    const candidate = value.trim();
+    if (!candidate) return null;
+
+    try {
+        return new URL(candidate).origin;
+    } catch {
+        try {
+            return new URL(`${defaultProtocol}//${candidate}`).origin;
+        } catch {
+            return null;
+        }
+    }
+}
+
+const configuredOrigins = new Set(
+    [
+        ...(process.env.ALLOWED_ORIGIN || '').split(','),
+        process.env.VERCEL_URL,
+        process.env.VERCEL_BRANCH_URL,
+        process.env.VERCEL_PROJECT_PRODUCTION_URL
+    ]
+        .map((origin) => normalizeOrigin(origin))
+        .filter(Boolean)
+);
+
+function currentRequestOrigin(req) {
+    const forwardedProtocol = req.get('x-forwarded-proto')?.split(',')[0].trim();
+    const forwardedHost = req.get('x-forwarded-host')?.split(',')[0].trim();
+    const protocol = forwardedProtocol || req.protocol || 'https';
+    const host = forwardedHost || req.get('host');
+    return host ? normalizeOrigin(`${protocol}://${host}`) : null;
+}
+
+function isAllowedOrigin(req, origin) {
+    if (!origin) return true;
+    const normalizedOrigin = normalizeOrigin(origin);
+    return Boolean(
+        normalizedOrigin &&
+        (configuredOrigins.has(normalizedOrigin) || normalizedOrigin === currentRequestOrigin(req))
+    );
+}
 
 const cookieOptions = Object.freeze({
     httpOnly: true,
@@ -35,17 +78,19 @@ const cookieOptions = Object.freeze({
     maxAge: JWT_MAX_AGE_MS
 });
 
-const corsOptions = {
-    origin(origin, callback) {
-        // Las llamadas same-origin y herramientas sin cabecera Origin no necesitan CORS.
-        if (!origin) return callback(null, true);
-        if (appOrigin && origin === appOrigin) return callback(null, true);
+function corsOptions(req, callback) {
+    const origin = req.get('origin');
+    if (!isAllowedOrigin(req, origin)) {
         return callback(new Error('Origen no permitido por CORS.'));
-    },
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
-    allowedHeaders: ['Content-Type']
-};
+    }
+
+    return callback(null, {
+        origin: origin || false,
+        credentials: true,
+        methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+        allowedHeaders: ['Content-Type']
+    });
+}
 
 app.set('trust proxy', 1);
 app.use(helmet({ contentSecurityPolicy: false }));
@@ -249,7 +294,7 @@ function requireAdmin(req, res, next) {
 
 function requireSameOrigin(req, res, next) {
     const origin = req.get('origin');
-    if (origin && (!appOrigin || origin !== appOrigin)) {
+    if (!isAllowedOrigin(req, origin)) {
         return res.status(403).json({ error: 'Origen no permitido.' });
     }
 
@@ -301,13 +346,19 @@ function parseCsv(csvText) {
 function getVersesUrl() {
     if (!process.env.VERSES_CSV_URL) return null;
 
-    const url = new URL(process.env.VERSES_CSV_URL);
+    const url = new URL(process.env.VERSES_CSV_URL.trim());
     const isGoogleHost = url.protocol === 'https:' && (
         url.hostname === 'docs.google.com' || url.hostname === 'docs.googleusercontent.com'
     );
 
     if (!isGoogleHost) {
         throw new Error('VERSES_CSV_URL debe ser una URL HTTPS publicada de Google Sheets.');
+    }
+
+    // Convierte automáticamente la URL /pubhtml que entrega Google en el CSV publicado.
+    if (url.hostname === 'docs.google.com' && /\/pubhtml\/?$/.test(url.pathname)) {
+        url.pathname = url.pathname.replace(/\/pubhtml\/?$/, '/pub');
+        url.searchParams.set('output', 'csv');
     }
 
     return url.toString();
