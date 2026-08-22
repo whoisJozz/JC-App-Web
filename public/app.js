@@ -30,6 +30,7 @@ const lectorQrDiv = document.getElementById('lector-qr');
 let idUsuarioEscaneado = null; 
 let usuarioLogueado = null; 
 let escanerActivo = null; 
+let eventoEditandoId = null;
 
 // ==========================================
 // 1. NAVEGACIÓN Y ACCESO
@@ -167,7 +168,8 @@ tabUsuarios.addEventListener('click', async () => {
         lectorQrDiv.classList.remove('hidden'); 
         formularioPuntos.classList.add('hidden'); 
     }
-    cargarUsuariosAdmin(); 
+    cargarUsuariosAdmin();
+    cargarEventosAdmin();
 });
 
 function iniciarEscanerAdmin() {
@@ -324,38 +326,232 @@ if(btnManualPuntos) {
 async function cargarUsuariosAdmin() {
     try {
         const res = await fetch('/api/usuarios'); const usuarios = await res.json();
+        if (!res.ok) throw new Error(usuarios.error || 'No fue posible cargar los usuarios.');
         badgeTotalUsuarios.innerText = `${usuarios.length} Usuarios`; 
         tablaUsuariosCuerpo.innerHTML = '';
         
         usuarios.forEach(usr => {
-            // UI REDISEÑADA: Liquid Glass Theme inyectado dinámicamente
-            tablaUsuariosCuerpo.innerHTML += `
-                <tr class="border-b border-white/5 hover:bg-white/5 transition-colors">
-                    <td class="px-4 py-4">
-                        <div class="font-bold text-white">${usr.nombre_completo}</div>
-                        <div class="text-xs text-slate-400">${usr.username}</div>
-                        <div class="mt-1">
-                            <span class="bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-xs font-bold px-2 py-0.5 rounded shadow-sm">
-                                ${usr.puntos_totales} pts ($${(usr.puntos_totales*0.5).toFixed(2)})
-                            </span>
-                        </div>
-                    </td>
-                    <td class="px-4 py-4 text-center">
-                        <button onclick="resetearPassword('${usr.username}')" class="bg-rose-500/20 text-rose-400 hover:bg-rose-500/40 font-bold py-1.5 px-3 rounded-lg border border-rose-500/30 transition-colors shadow-sm">
-                            Reset
-                        </button>
-                    </td>
-                </tr>`;
+            // Se construye con textContent para no interpretar datos de usuarios como HTML.
+            const row = document.createElement('tr');
+            row.className = 'border-b border-white/5 hover:bg-white/5 transition-colors';
+            const infoCell = document.createElement('td');
+            infoCell.className = 'px-4 py-4';
+
+            const nombre = document.createElement('div');
+            nombre.className = 'font-bold text-white';
+            nombre.textContent = usr.nombre_completo;
+            const username = document.createElement('div');
+            username.className = 'text-xs text-slate-400';
+            username.textContent = usr.username;
+            const pointsWrap = document.createElement('div');
+            pointsWrap.className = 'mt-1';
+            const points = document.createElement('span');
+            points.className = 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-xs font-bold px-2 py-0.5 rounded shadow-sm';
+            points.textContent = `${usr.puntos_totales} pts ($${(usr.puntos_totales * 0.5).toFixed(2)})`;
+            pointsWrap.append(points);
+            infoCell.append(nombre, username, pointsWrap);
+
+            const actionCell = document.createElement('td');
+            actionCell.className = 'px-4 py-4 text-center';
+            const actions = document.createElement('div');
+            actions.className = 'flex flex-col gap-2 items-center';
+            const resetButton = document.createElement('button');
+            resetButton.type = 'button';
+            resetButton.className = 'bg-rose-500/20 text-rose-400 hover:bg-rose-500/40 font-bold py-1.5 px-3 rounded-lg border border-rose-500/30 transition-colors shadow-sm';
+            resetButton.textContent = 'Reset';
+            resetButton.addEventListener('click', () => resetearPassword(usr.username));
+            const deleteButton = document.createElement('button');
+            deleteButton.type = 'button';
+            deleteButton.className = 'bg-red-600/80 text-white hover:bg-red-500 font-bold py-1.5 px-3 rounded-lg border border-red-300/20 transition-colors shadow-sm';
+            deleteButton.textContent = 'Eliminar';
+            deleteButton.addEventListener('click', () => eliminarUsuario(usr.id, usr.nombre_completo));
+            actions.append(resetButton, deleteButton);
+            actionCell.append(actions);
+            row.append(infoCell, actionCell);
+            tablaUsuariosCuerpo.append(row);
         });
     } catch (e) { console.error("Error cargando tabla de usuarios"); }
 }
 
 async function resetearPassword(username) {
-    if (!confirm(`¿Resetear la clave de ${username} a '1234'?`)) return;
+    const newPassword = prompt(`Nueva contraseña temporal para ${username} (8 caracteres mínimo):`);
+    if (newPassword === null) return;
+    if (newPassword.length < 8) return alert("La contraseña debe tener al menos 8 caracteres.");
+    if (!confirm(`¿Confirmas el cambio de contraseña para ${username}?`)) return;
     try {
-        const res = await fetch('/api/usuarios/reset-password', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username }) });
-        if (res.ok) { alert("Clave reestablecida a: 1234"); cargarUsuariosAdmin(); }
+        const res = await fetch('/api/usuarios/reset-password', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, newPassword })
+        });
+        const data = await res.json();
+        if (res.ok) { alert("Contraseña actualizada."); cargarUsuariosAdmin(); }
+        else alert(data.error || "No fue posible actualizar la contraseña.");
     } catch (e) { alert("Error de red local."); }
+}
+
+async function eliminarUsuario(id, nombre) {
+    if (!confirm(`¿Eliminar definitivamente a ${nombre}? También se eliminará su historial de puntos.`)) return;
+
+    try {
+        const res = await fetch(`/api/usuarios/${encodeURIComponent(id)}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (!res.ok) return alert(data.error || 'No fue posible eliminar el usuario.');
+
+        alert(data.mensaje);
+        cargarUsuariosAdmin();
+    } catch (error) {
+        alert('Error de red al eliminar el usuario.');
+    }
+}
+
+function obtenerControlesEventos() {
+    return {
+        form: document.getElementById('formulario-evento'),
+        title: document.getElementById('input-evento-titulo'),
+        date: document.getElementById('input-evento-fecha'),
+        submit: document.getElementById('btn-guardar-evento'),
+        cancel: document.getElementById('btn-cancelar-evento'),
+        list: document.getElementById('lista-eventos-admin'),
+        badge: document.getElementById('badge-total-eventos')
+    };
+}
+
+function fechaParaInput(fecha) {
+    const date = new Date(fecha);
+    if (Number.isNaN(date.getTime())) return '';
+    const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+    return localDate.toISOString().slice(0, 16);
+}
+
+function limpiarFormularioEvento() {
+    const controls = obtenerControlesEventos();
+    eventoEditandoId = null;
+    controls.form.reset();
+    controls.submit.textContent = 'Agregar Evento';
+    controls.cancel.classList.add('hidden');
+}
+
+function editarEvento(evento) {
+    const controls = obtenerControlesEventos();
+    eventoEditandoId = evento.id;
+    controls.title.value = evento.titulo;
+    controls.date.value = fechaParaInput(evento.fecha);
+    controls.submit.textContent = 'Guardar Cambios';
+    controls.cancel.classList.remove('hidden');
+    controls.title.focus();
+}
+
+async function cambiarEstadoEvento(id, activo) {
+    try {
+        const res = await fetch(`/api/eventos/${encodeURIComponent(id)}/estado`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ activo })
+        });
+        const data = await res.json();
+        if (!res.ok) return alert(data.error || 'No fue posible actualizar el evento.');
+        cargarEventosAdmin();
+    } catch (error) {
+        alert('Error de red al actualizar el evento.');
+    }
+}
+
+async function cargarEventosAdmin() {
+    const controls = obtenerControlesEventos();
+    if (!controls.list) return;
+
+    try {
+        const res = await fetch('/api/eventos/admin');
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'No fue posible cargar los eventos.');
+
+        const eventos = data.eventos || [];
+        controls.badge.textContent = `${eventos.length} Eventos`;
+        controls.list.replaceChildren();
+
+        if (!eventos.length) {
+            const empty = document.createElement('p');
+            empty.className = 'text-xs text-slate-400 text-center py-2';
+            empty.textContent = 'Aún no hay eventos registrados.';
+            controls.list.append(empty);
+            return;
+        }
+
+        eventos.forEach((evento) => {
+            const item = document.createElement('div');
+            item.className = 'bg-slate-950/40 border border-white/10 rounded-xl p-3 flex flex-col gap-3';
+            const header = document.createElement('div');
+            header.className = 'flex items-start justify-between gap-3';
+            const detail = document.createElement('div');
+            const title = document.createElement('p');
+            title.className = 'font-semibold text-sm text-white';
+            title.textContent = evento.titulo;
+            const date = document.createElement('p');
+            date.className = 'text-xs text-slate-400 mt-1';
+            date.textContent = new Date(evento.fecha).toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' });
+            detail.append(title, date);
+            const status = document.createElement('span');
+            status.className = evento.activo
+                ? 'text-xs font-bold text-emerald-300 bg-emerald-500/15 border border-emerald-400/20 px-2 py-1 rounded-full'
+                : 'text-xs font-bold text-slate-400 bg-slate-600/30 border border-slate-500/30 px-2 py-1 rounded-full';
+            status.textContent = evento.activo ? 'Activo' : 'Inactivo';
+            header.append(detail, status);
+
+            const actions = document.createElement('div');
+            actions.className = 'flex gap-2';
+            const edit = document.createElement('button');
+            edit.type = 'button';
+            edit.className = 'flex-1 bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold py-2 px-3 rounded-lg transition';
+            edit.textContent = 'Editar';
+            edit.addEventListener('click', () => editarEvento(evento));
+            const toggle = document.createElement('button');
+            toggle.type = 'button';
+            toggle.className = evento.activo
+                ? 'flex-1 bg-amber-500/20 hover:bg-amber-500/35 text-amber-300 border border-amber-400/20 text-xs font-bold py-2 px-3 rounded-lg transition'
+                : 'flex-1 bg-emerald-500/20 hover:bg-emerald-500/35 text-emerald-300 border border-emerald-400/20 text-xs font-bold py-2 px-3 rounded-lg transition';
+            toggle.textContent = evento.activo ? 'Desactivar' : 'Activar';
+            toggle.addEventListener('click', () => cambiarEstadoEvento(evento.id, !evento.activo));
+            actions.append(edit, toggle);
+            item.append(header, actions);
+            controls.list.append(item);
+        });
+    } catch (error) {
+        controls.list.textContent = error.message;
+    }
+}
+
+const formularioEvento = document.getElementById('formulario-evento');
+if (formularioEvento) {
+    formularioEvento.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const controls = obtenerControlesEventos();
+        const payload = { titulo: controls.title.value.trim(), fecha: controls.date.value };
+        const isEditing = eventoEditandoId !== null;
+        const endpoint = isEditing ? `/api/eventos/${encodeURIComponent(eventoEditandoId)}` : '/api/eventos';
+        controls.submit.disabled = true;
+        controls.submit.textContent = 'Guardando…';
+
+        try {
+            const res = await fetch(endpoint, {
+                method: isEditing ? 'PUT' : 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const data = await res.json();
+            if (!res.ok) return alert(data.error || 'No fue posible guardar el evento.');
+
+            limpiarFormularioEvento();
+            cargarEventosAdmin();
+        } catch (error) {
+            alert('Error de red al guardar el evento.');
+        } finally {
+            controls.submit.disabled = false;
+            controls.submit.textContent = eventoEditandoId !== null ? 'Guardar Cambios' : 'Agregar Evento';
+        }
+    });
+
+    document.getElementById('btn-cancelar-evento').addEventListener('click', limpiarFormularioEvento);
 }
 
 // ==========================================
@@ -377,3 +573,165 @@ document.addEventListener('DOMContentLoaded', () => {
     setupPasswordToggle('toggle-login-password', 'login-password');
     setupPasswordToggle('toggle-reg-password', 'reg-password');
 });
+
+// ==========================================
+// 8. HOOKS CLOUD: SESIÓN, FECHAS Y VERSÍCULOS
+// No modifica los IDs existentes. Crea sus propios nodos con data-*.
+// ==========================================
+(() => {
+    const nativeFetch = window.fetch.bind(window);
+    let avisoSesionMostrado = false;
+    let contadorFechas = null;
+
+    function rutaApi(input) {
+        const url = input instanceof Request ? input.url : input;
+        return new URL(url, window.location.origin).pathname;
+    }
+
+    function mostrarLoginPorSesionExpirada() {
+        if (avisoSesionMostrado) return;
+        avisoSesionMostrado = true;
+
+        if (escanerActivo) {
+            escanerActivo.stop().catch(() => {});
+            escanerActivo = null;
+        }
+
+        usuarioLogueado = null;
+        pantallaUsuario.classList.add('hidden');
+        pantallaAdmin.classList.add('hidden');
+        contenedorAcceso.classList.remove('hidden');
+        pantallaRegistro.classList.add('hidden');
+        pantallaLogin.classList.remove('hidden');
+        alert('Tu sesión expiró. Inicia sesión nuevamente.');
+    }
+
+    // Las cookies httpOnly viajan automáticamente en el mismo origen; este hook
+    // también centraliza la reacción al vencimiento del JWT en las llamadas existentes.
+    window.fetch = async (input, init = {}) => {
+        const response = await nativeFetch(input, { ...init, credentials: 'same-origin' });
+        const path = rutaApi(input);
+        const isPublicAuth = path === '/api/login' || path === '/api/registro';
+        if (response.status === 401 && !isPublicAuth) mostrarLoginPorSesionExpirada();
+        return response;
+    };
+
+    window.cerrarSesion = async () => {
+        try {
+            await fetch('/api/logout', { method: 'POST' });
+        } finally {
+            avisoSesionMostrado = false;
+            mostrarLoginPorSesionExpirada();
+            avisoSesionMostrado = false;
+        }
+    };
+
+    function crearElemento(tag, className, text) {
+        const element = document.createElement(tag);
+        if (className) element.className = className;
+        if (text !== undefined) element.textContent = text;
+        return element;
+    }
+
+    function actualizarContadores() {
+        document.querySelectorAll('[data-jc-countdown]').forEach((element) => {
+            const remaining = Number(element.dataset.jcCountdown) - Date.now();
+            if (remaining <= 0) {
+                element.textContent = '¡Ya comenzó!';
+                return;
+            }
+
+            const totalMinutes = Math.floor(remaining / 60000);
+            const days = Math.floor(totalMinutes / 1440);
+            const hours = Math.floor((totalMinutes % 1440) / 60);
+            const minutes = totalMinutes % 60;
+            element.textContent = `${days}d ${hours}h ${minutes}m`;
+        });
+    }
+
+    function renderizarFechas(container, fechas) {
+        container.replaceChildren();
+        if (!fechas.length) {
+            container.append(crearElemento('p', 'text-xs text-slate-400', 'Próximamente anunciaremos las fechas del campamento.'));
+            return;
+        }
+
+        const fragment = document.createDocumentFragment();
+        fechas.forEach(({ titulo, fecha }) => {
+            const date = new Date(fecha);
+            const item = crearElemento('div', 'flex items-center justify-between gap-3 py-2 border-b border-white/5 last:border-0');
+            const detail = crearElemento('div');
+            detail.append(
+                crearElemento('p', 'font-semibold text-slate-100 text-sm', titulo),
+                crearElemento('p', 'text-xs text-slate-400', date.toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' }))
+            );
+            const countdown = crearElemento('span', 'text-xs font-bold text-cyan-300 whitespace-nowrap');
+            countdown.dataset.jcCountdown = String(date.getTime());
+            item.append(detail, countdown);
+            fragment.append(item);
+        });
+        container.append(fragment);
+        actualizarContadores();
+    }
+
+    async function cargarFechasJC(container) {
+        const response = await fetch('/api/eventos');
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'No fue posible cargar los eventos.');
+        renderizarFechas(container, data.eventos || []);
+    }
+
+    async function cargarVersiculoJC(target) {
+        target.textContent = 'Cargando versículo…';
+        const response = await fetch('/api/versiculos');
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'No fue posible cargar el versículo.');
+        // textContent evita interpretar contenido de la hoja como HTML.
+        target.textContent = data.versiculo;
+    }
+
+    function montarWidgetsCloud() {
+        const shell = document.querySelector('.app-shell');
+        if (!shell || shell.querySelector('[data-jc-cloud-widgets]')) return;
+
+        const section = crearElemento('section', 'mt-6 space-y-4 text-left', undefined);
+        section.dataset.jcCloudWidgets = 'true';
+
+        const verseCard = crearElemento('article', 'bg-slate-800/60 border border-violet-400/20 rounded-2xl p-4 shadow-lg');
+        verseCard.append(crearElemento('h2', 'text-xs uppercase tracking-widest font-bold text-violet-300 mb-2', 'Versículo del día'));
+        const verseText = crearElemento('p', 'text-sm leading-relaxed text-slate-200 min-h-12');
+        const refreshVerse = crearElemento('button', 'mt-3 text-xs font-bold text-cyan-300 hover:text-cyan-200 transition-colors', 'Otro versículo');
+        refreshVerse.type = 'button';
+        refreshVerse.addEventListener('click', async () => {
+            refreshVerse.disabled = true;
+            try {
+                await cargarVersiculoJC(verseText);
+            } catch (error) {
+                verseText.textContent = error.message;
+            } finally {
+                refreshVerse.disabled = false;
+            }
+        });
+        verseCard.append(verseText, refreshVerse);
+
+        const datesCard = crearElemento('article', 'bg-slate-800/60 border border-cyan-400/20 rounded-2xl p-4 shadow-lg');
+        datesCard.append(crearElemento('h2', 'text-xs uppercase tracking-widest font-bold text-cyan-300 mb-2', 'Fechas importantes'));
+        const datesList = crearElemento('div', 'space-y-1');
+        datesCard.append(datesList);
+
+        section.append(verseCard, datesCard);
+        shell.append(section);
+
+        cargarVersiculoJC(verseText).catch((error) => { verseText.textContent = error.message; });
+        cargarFechasJC(datesList).catch((error) => { datesList.textContent = error.message; });
+
+        if (contadorFechas) window.clearInterval(contadorFechas);
+        contadorFechas = window.setInterval(actualizarContadores, 60000);
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', montarWidgetsCloud, { once: true });
+    } else {
+        montarWidgetsCloud();
+    }
+})();

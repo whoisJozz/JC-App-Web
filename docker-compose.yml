@@ -13,7 +13,7 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
       # LÍNEA MÁGICA: Inyecta el script SQL automáticamente al iniciar por primera vez
-      - ./db-init:/docker-entrypoint-initdb.d
+      - ./public/db-init:/docker-entrypoint-initdb.d
     networks:
       - jc_network
 
@@ -24,11 +24,10 @@ services:
       - "3000:3000"
       - "3443:3443"
     environment:
-      DB_USER: admin_jc
-      DB_PASSWORD: password_seguro_123
-      DB_HOST: db
-      DB_NAME: jc_recompensas
-      DB_PORT: 5432
+      DATABASE_URL: postgresql://admin_jc:password_seguro_123@db:5432/jc_recompensas
+      JWT_SECRET: local_only_change_this_to_a_32_character_secret
+      ALLOWED_ORIGIN: https://localhost:3443
+      NODE_ENV: development
     depends_on:
       - db
     networks:
