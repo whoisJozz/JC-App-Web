@@ -1,11 +1,11 @@
 'use strict';
 
-const path = require('path');
-const dotenv = require('dotenv');
-
-// Las rutas absolutas evitan depender del directorio desde el que Vercel o Node inicien el proceso.
-dotenv.config({ path: path.resolve(__dirname, '..', '.env.local') });
-dotenv.config({ path: path.resolve(__dirname, '..', '.env') });
+try {
+    require('dotenv').config();
+} catch (error) {
+    // En Vercel dotenv no es necesario: las variables llegan inyectadas por la plataforma.
+    console.warn('No fue posible cargar dotenv:', error.message);
+}
 
 const bcrypt = require('bcrypt');
 const cookieParser = require('cookie-parser');
@@ -15,7 +15,7 @@ const helmet = require('helmet');
 const jwt = require('jsonwebtoken');
 const rateLimit = require('express-rate-limit');
 const { randomInt } = require('crypto');
-const { Pool } = require('pg');
+const { Client } = require('pg');
 const xss = require('xss');
 
 const app = express();
@@ -25,33 +25,7 @@ const JWT_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 const BCRYPT_ROUNDS = 12;
 const MAX_TRANSACTION_POINTS = 10000;
 const appOrigin = process.env.ALLOWED_ORIGIN;
-const isVercelDeployment = process.env.VERCEL === '1' || process.env.NODE_ENV === 'production';
-let databaseConfigurationError = !process.env.DATABASE_URL
-    ? 'DATABASE_URL no está configurada.'
-    : null;
-const jwtConfigurationError = !process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32
-    ? 'JWT_SECRET no está configurado correctamente.'
-    : null;
-
-// No se crea el Pool sin URL: así el módulo siempre carga y la API responde JSON aun con
-// configuración incompleta. Vercel reutiliza este Pool entre invocaciones calientes.
-let pool = null;
-if (!databaseConfigurationError) {
-    try {
-        pool = new Pool({
-            connectionString: process.env.DATABASE_URL,
-            ssl: isVercelDeployment ? { rejectUnauthorized: true } : false,
-            max: 1,
-            idleTimeoutMillis: 10000,
-            connectionTimeoutMillis: 5000
-        });
-        pool.on('error', (error) => console.error('Error inesperado del Pool de PostgreSQL:', error));
-    } catch (error) {
-        console.error('DATABASE_URL inválida:', error.message);
-        databaseConfigurationError = 'DATABASE_URL no tiene un formato válido.';
-        pool = null;
-    }
-}
+const FALLBACK_VERSE = 'Todo lo puedo en Cristo que me fortalece. — Filipenses 4:13';
 
 const cookieOptions = Object.freeze({
     httpOnly: true,
@@ -190,6 +164,9 @@ function activeValue(value) {
     return value;
 }
 
+class ConfigurationError extends Error {}
+class ValidationError extends Error {}
+
 function sendConfigurationError(res, message) {
     return res.status(500).json({
         error: 'SERVER_CONFIGURATION_ERROR',
@@ -197,26 +174,37 @@ function sendConfigurationError(res, message) {
     });
 }
 
-function requireDatabase(req, res, next) {
-    if (databaseConfigurationError || !pool) {
-        return sendConfigurationError(res, databaseConfigurationError || 'La base de datos no está disponible.');
+function getJwtSecret() {
+    if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
+        throw new ConfigurationError('JWT_SECRET no está configurado correctamente.');
     }
 
-    return next();
+    return process.env.JWT_SECRET;
 }
 
-function requireJwtConfiguration(req, res, next) {
-    if (jwtConfigurationError) {
-        return sendConfigurationError(res, jwtConfigurationError);
+async function ejecutarQuery(queryText, params = []) {
+    if (!process.env.DATABASE_URL) {
+        throw new ConfigurationError('DATABASE_URL no está configurada.');
     }
 
-    return next();
+    const client = new Client({
+        connectionString: process.env.DATABASE_URL,
+        ssl: { rejectUnauthorized: false }
+    });
+
+    try {
+        await client.connect();
+        const res = await client.query(queryText, params);
+        return res;
+    } finally {
+        await client.end();
+    }
 }
 
 function signUser(user) {
     return jwt.sign(
         { username: user.username, rol: user.rol },
-        process.env.JWT_SECRET,
+        getJwtSecret(),
         { subject: String(user.id), expiresIn: JWT_EXPIRES_IN, issuer: 'jc-app', audience: 'jc-app-web' }
     );
 }
@@ -231,22 +219,21 @@ function clearSession(res) {
 }
 
 function requireAuth(req, res, next) {
-    if (jwtConfigurationError) {
-        return sendConfigurationError(res, jwtConfigurationError);
-    }
-
     const token = req.cookies[JWT_COOKIE];
     if (!token) {
         return res.status(401).json({ error: 'SESSION_EXPIRED', message: 'Tu sesión expiró. Inicia sesión nuevamente.' });
     }
 
     try {
-        req.auth = jwt.verify(token, process.env.JWT_SECRET, {
+        req.auth = jwt.verify(token, getJwtSecret(), {
             issuer: 'jc-app',
             audience: 'jc-app-web'
         });
         return next();
-    } catch {
+    } catch (error) {
+        if (error instanceof ConfigurationError) {
+            return sendConfigurationError(res, error.message);
+        }
         clearSession(res);
         return res.status(401).json({ error: 'SESSION_EXPIRED', message: 'Tu sesión expiró. Inicia sesión nuevamente.' });
     }
@@ -268,8 +255,6 @@ function requireSameOrigin(req, res, next) {
 
     return next();
 }
-
-class ValidationError extends Error {}
 
 function isConstraintViolation(error) {
     return error && error.code === '23514';
@@ -360,12 +345,12 @@ async function loadVerses() {
     return verses;
 }
 
-app.post('/api/registro', authLimiter, requireSameOrigin, requireDatabase, async (req, res, next) => {
+app.post('/api/registro', authLimiter, requireSameOrigin, async (req, res, next) => {
     try {
         const username = phoneValue(req.body.telefono);
         const nombre = sanitizedText(req.body.nombre, 'Nombre', 100);
         const passwordHash = await bcrypt.hash(passwordValue(req.body.password), BCRYPT_ROUNDS);
-        const result = await pool.query(
+        const result = await ejecutarQuery(
             `INSERT INTO usuarios (username, nombre_completo, rol, password_hash)
              VALUES ($1, $2, 'usuario', $3)
              ON CONFLICT (username) DO NOTHING
@@ -383,11 +368,11 @@ app.post('/api/registro', authLimiter, requireSameOrigin, requireDatabase, async
     }
 });
 
-app.post('/api/login', authLimiter, requireSameOrigin, requireDatabase, requireJwtConfiguration, async (req, res, next) => {
+app.post('/api/login', authLimiter, requireSameOrigin, async (req, res, next) => {
     try {
         const username = usernameValue(req.body.username);
         const password = passwordValue(req.body.password);
-        const result = await pool.query(
+        const result = await ejecutarQuery(
             'SELECT id, username, rol, password_hash FROM usuarios WHERE username = $1',
             [username]
         );
@@ -417,9 +402,9 @@ app.get('/api/auth/me', requireAuth, (req, res) => {
     return res.json({ usuario: { id: Number(req.auth.sub), username: req.auth.username, rol: req.auth.rol } });
 });
 
-app.get('/api/usuarios', requireAuth, requireAdmin, requireDatabase, async (req, res, next) => {
+app.get('/api/usuarios', requireAuth, requireAdmin, async (req, res, next) => {
     try {
-        const result = await pool.query(
+        const result = await ejecutarQuery(
             "SELECT id, username, nombre_completo, puntos_totales FROM usuarios WHERE rol = 'usuario' ORDER BY puntos_totales DESC, username ASC"
         );
         return res.json(result.rows);
@@ -428,10 +413,10 @@ app.get('/api/usuarios', requireAuth, requireAdmin, requireDatabase, async (req,
     }
 });
 
-app.delete('/api/usuarios/:id', requireAuth, requireAdmin, requireSameOrigin, requireDatabase, async (req, res, next) => {
+app.delete('/api/usuarios/:id', requireAuth, requireAdmin, requireSameOrigin, async (req, res, next) => {
     try {
         const id = resourceId(req.params.id, 'ID de usuario');
-        const result = await pool.query(
+        const result = await ejecutarQuery(
             "DELETE FROM usuarios WHERE id = $1 AND rol = 'usuario' RETURNING id, username",
             [id]
         );
@@ -443,14 +428,14 @@ app.delete('/api/usuarios/:id', requireAuth, requireAdmin, requireSameOrigin, re
     }
 });
 
-app.get('/api/usuarios/:username', requireAuth, requireDatabase, async (req, res, next) => {
+app.get('/api/usuarios/:username', requireAuth, async (req, res, next) => {
     try {
         const username = usernameValue(req.params.username);
         if (req.auth.rol !== 'admin' && req.auth.username !== username) {
             return res.status(403).json({ error: 'No tienes permiso para consultar este saldo.' });
         }
 
-        const result = await pool.query('SELECT puntos_totales FROM usuarios WHERE username = $1', [username]);
+        const result = await ejecutarQuery('SELECT puntos_totales FROM usuarios WHERE username = $1', [username]);
         if (!result.rows.length) return res.status(404).json({ error: 'Usuario no encontrado.' });
 
         return res.json({ puntos: result.rows[0].puntos_totales });
@@ -459,15 +444,15 @@ app.get('/api/usuarios/:username', requireAuth, requireDatabase, async (req, res
     }
 });
 
-app.post('/api/transacciones', requireAuth, requireAdmin, requireSameOrigin, requireDatabase, transactionLimiter, async (req, res, next) => {
+app.post('/api/transacciones', requireAuth, requireAdmin, requireSameOrigin, transactionLimiter, async (req, res, next) => {
     try {
         const username = usernameValue(req.body.username);
         const points = integerPoints(req.body.puntos);
         const concept = sanitizedText(req.body.concepto, 'Concepto', 255);
-        const userResult = await pool.query('SELECT id FROM usuarios WHERE username = $1 AND rol = $2', [username, 'usuario']);
+        const userResult = await ejecutarQuery('SELECT id FROM usuarios WHERE username = $1 AND rol = $2', [username, 'usuario']);
         if (!userResult.rows.length) return res.status(404).json({ error: 'Usuario no existe.' });
 
-        await pool.query(
+        await ejecutarQuery(
             'INSERT INTO transacciones (usuario_id, concepto, cantidad_puntos) VALUES ($1, $2, $3)',
             [userResult.rows[0].id, concept, points]
         );
@@ -481,12 +466,12 @@ app.post('/api/transacciones', requireAuth, requireAdmin, requireSameOrigin, req
     }
 });
 
-app.post('/api/usuarios/reset-password', requireAuth, requireAdmin, requireSameOrigin, requireDatabase, async (req, res, next) => {
+app.post('/api/usuarios/reset-password', requireAuth, requireAdmin, requireSameOrigin, async (req, res, next) => {
     try {
         const username = usernameValue(req.body.username);
         const newPassword = passwordValue(req.body.newPassword);
         const passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
-        const result = await pool.query(
+        const result = await ejecutarQuery(
             "UPDATE usuarios SET password_hash = $1 WHERE username = $2 AND rol = 'usuario' RETURNING username",
             [passwordHash, username]
         );
@@ -498,9 +483,9 @@ app.post('/api/usuarios/reset-password', requireAuth, requireAdmin, requireSameO
     }
 });
 
-app.get('/api/eventos', requireDatabase, async (req, res, next) => {
+app.get('/api/eventos', async (req, res, next) => {
     try {
-        const result = await pool.query(
+        const result = await ejecutarQuery(
             'SELECT id, titulo, fecha FROM eventos WHERE activo = TRUE ORDER BY fecha ASC, id ASC'
         );
         return res.json({ eventos: result.rows });
@@ -509,9 +494,9 @@ app.get('/api/eventos', requireDatabase, async (req, res, next) => {
     }
 });
 
-app.get('/api/eventos/admin', requireAuth, requireAdmin, requireDatabase, async (req, res, next) => {
+app.get('/api/eventos/admin', requireAuth, requireAdmin, async (req, res, next) => {
     try {
-        const result = await pool.query(
+        const result = await ejecutarQuery(
             'SELECT id, titulo, fecha, activo FROM eventos ORDER BY fecha ASC, id ASC'
         );
         return res.json({ eventos: result.rows });
@@ -520,11 +505,11 @@ app.get('/api/eventos/admin', requireAuth, requireAdmin, requireDatabase, async 
     }
 });
 
-app.post('/api/eventos', requireAuth, requireAdmin, requireSameOrigin, requireDatabase, async (req, res, next) => {
+app.post('/api/eventos', requireAuth, requireAdmin, requireSameOrigin, async (req, res, next) => {
     try {
         const title = sanitizedText(req.body.titulo, 'Título', 100);
         const date = eventDateValue(req.body.fecha);
-        const result = await pool.query(
+        const result = await ejecutarQuery(
             'INSERT INTO eventos (titulo, fecha) VALUES ($1, $2) RETURNING id, titulo, fecha, activo',
             [title, date]
         );
@@ -534,12 +519,12 @@ app.post('/api/eventos', requireAuth, requireAdmin, requireSameOrigin, requireDa
     }
 });
 
-app.put('/api/eventos/:id', requireAuth, requireAdmin, requireSameOrigin, requireDatabase, async (req, res, next) => {
+app.put('/api/eventos/:id', requireAuth, requireAdmin, requireSameOrigin, async (req, res, next) => {
     try {
         const id = resourceId(req.params.id, 'ID de evento');
         const title = sanitizedText(req.body.titulo, 'Título', 100);
         const date = eventDateValue(req.body.fecha);
-        const result = await pool.query(
+        const result = await ejecutarQuery(
             'UPDATE eventos SET titulo = $1, fecha = $2 WHERE id = $3 RETURNING id, titulo, fecha, activo',
             [title, date, id]
         );
@@ -551,11 +536,11 @@ app.put('/api/eventos/:id', requireAuth, requireAdmin, requireSameOrigin, requir
     }
 });
 
-app.patch('/api/eventos/:id/estado', requireAuth, requireAdmin, requireSameOrigin, requireDatabase, async (req, res, next) => {
+app.patch('/api/eventos/:id/estado', requireAuth, requireAdmin, requireSameOrigin, async (req, res, next) => {
     try {
         const id = resourceId(req.params.id, 'ID de evento');
         const active = activeValue(req.body.activo);
-        const result = await pool.query(
+        const result = await ejecutarQuery(
             'UPDATE eventos SET activo = $1 WHERE id = $2 RETURNING id, titulo, fecha, activo',
             [active, id]
         );
@@ -567,22 +552,27 @@ app.patch('/api/eventos/:id/estado', requireAuth, requireAdmin, requireSameOrigi
     }
 });
 
-app.get('/api/versiculos', async (req, res, next) => {
+app.get('/api/versiculos', async (req, res) => {
     try {
         const verses = await loadVerses();
-        if (!verses.length) return res.status(404).json({ error: 'No hay versículos disponibles.' });
+        if (!verses.length) return res.json({ versiculo: FALLBACK_VERSE, fuente: 'respaldo' });
 
         // La caché solo conserva el CSV; la selección usa entropía nueva en cada petición.
         const verse = verses[randomInt(verses.length)];
         return res.json({ versiculo: verse });
     } catch (error) {
-        return next(error);
+        console.warn('No fue posible obtener el CSV de versículos:', error.message);
+        return res.json({ versiculo: FALLBACK_VERSE, fuente: 'respaldo' });
     }
 });
 
 app.use((req, res) => res.status(404).json({ error: 'Ruta no encontrada.' }));
 
 app.use((error, req, res, next) => { // eslint-disable-line no-unused-vars
+    if (error instanceof ConfigurationError) {
+        return sendConfigurationError(res, error.message);
+    }
+
     if (error instanceof ValidationError) {
         return res.status(400).json({ error: error.message });
     }
