@@ -1,737 +1,874 @@
+'use strict';
+
 // ==========================================
-// CONFIGURACIÓN GLOBAL Y DEPURACIÓN
+// ESTADO Y REFERENCIAS DE LA APLICACIÓN
 // ==========================================
-window.onerror = function(message, source, lineno, colno, error) {
-    console.error(`🔴 ERROR FATAL:\nMsg: ${message}\nLínea: ${lineno}`);
-    return true; 
+const $ = (id) => document.getElementById(id);
+
+const dom = {
+    publicView: $('vista-publica'),
+    access: $('contenedor-acceso'),
+    loginForm: $('form-login'),
+    registerForm: $('form-registro'),
+    userView: $('pantalla-usuario'),
+    adminView: $('pantalla-admin'),
+    sessionBar: $('barra-sesion'),
+    sessionIdentity: $('sesion-identidad'),
+    logoutButton: $('btn-cerrar-sesion'),
+    widgets: $('dashboard-widgets'),
+    scannerTab: $('tab-scanner'),
+    usersTab: $('tab-usuarios'),
+    eventsTab: $('tab-eventos'),
+    scannerPanel: $('seccion-admin-scanner'),
+    usersPanel: $('seccion-admin-usuarios'),
+    eventsPanel: $('seccion-admin-eventos'),
+    scanner: $('lector-qr'),
+    pointsForm: $('formulario-puntos'),
+    usersBody: $('tabla-usuarios-cuerpo'),
+    usersBadge: $('badge-total-usuarios')
 };
-window.addEventListener("unhandledrejection", function(promiseRejectionEvent) {
-    console.warn(`⚠️ PROMESA RECHAZADA:\n${promiseRejectionEvent.reason}`);
-});
 
-// Referencias del DOM
-const contenedorAcceso = document.getElementById('contenedor-acceso');
-const pantallaLogin = document.getElementById('pantalla-login');
-const pantallaRegistro = document.getElementById('pantalla-registro');
-const pantallaUsuario = document.getElementById('pantalla-usuario');
-const pantallaAdmin = document.getElementById('pantalla-admin');
+const state = {
+    user: null,
+    scannedUsername: null,
+    scanner: null,
+    activeAdminTab: 'scanner',
+    events: [],
+    editingEventId: null,
+    eventImageData: undefined,
+    currentEventImage: null,
+    countdownTimer: null
+};
 
-const tabScanner = document.getElementById('tab-scanner');
-const tabUsuarios = document.getElementById('tab-usuarios');
-const seccionAdminScanner = document.getElementById('seccion-admin-scanner');
-const seccionAdminUsuarios = document.getElementById('seccion-admin-usuarios');
-const tablaUsuariosCuerpo = document.getElementById('tabla-usuarios-cuerpo');
-const badgeTotalUsuarios = document.getElementById('badge-total-usuarios');
+const MAX_IMAGE_BYTES = 1_500_000;
+const ALLOWED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 
-const formularioPuntos = document.getElementById('formulario-puntos');
-const lectorQrDiv = document.getElementById('lector-qr');
-
-// Variables de Estado
-let idUsuarioEscaneado = null; 
-let usuarioLogueado = null; 
-let escanerActivo = null; 
-let eventoEditandoId = null;
-
-// ==========================================
-// 1. NAVEGACIÓN Y ACCESO
-// ==========================================
-document.getElementById('link-registro').addEventListener('click', (e) => { 
-    e.preventDefault(); 
-    pantallaLogin.classList.add('hidden'); 
-    pantallaRegistro.classList.remove('hidden'); 
-});
-document.getElementById('link-login').addEventListener('click', (e) => { 
-    e.preventDefault(); 
-    pantallaRegistro.classList.add('hidden'); 
-    pantallaLogin.classList.remove('hidden'); 
-});
-
-// ==========================================
-// 2. LÓGICA DE USUARIOS (CAMPISTAS)
-// ==========================================
-async function cargarSaldoUsuario(username, esAdmin = false) {
-    try {
-        const res = await fetch(`/api/usuarios/${username}`);
-        const data = await res.json();
-        if (res.ok) {
-            const equivalenciaMxn = (data.puntos * 0.50).toFixed(2); // 1 punto = $0.50
-            if (esAdmin) {
-                document.getElementById('admin-saldo-usuario').innerText = data.puntos;
-                document.getElementById('admin-saldo-mxn').innerText = equivalenciaMxn;
-            } else {
-                document.getElementById('saldo-usuario').innerText = data.puntos;
-                document.getElementById('saldo-mxn').innerText = equivalenciaMxn;
-            }
-        }
-    } catch (error) { console.error("Error al obtener saldo"); }
+function isAdmin(user = state.user) {
+    return String(user?.rol || '').trim().toLowerCase() === 'admin';
 }
 
-document.getElementById('btn-actualizar-saldo').addEventListener('click', () => {
-    if (usuarioLogueado) cargarSaldoUsuario(usuarioLogueado);
-});
+function formatDate(value, options = { dateStyle: 'long', timeStyle: 'short' }) {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? 'Fecha por anunciar' : date.toLocaleString('es-MX', options);
+}
 
-function generarQRUsuario(username) {
-    const qrContenedor = document.getElementById('qr-contenedor');
-    qrContenedor.innerHTML = ''; 
-    new QRCode(qrContenedor, { 
-        text: JSON.stringify({ id_usuario: username }), 
-        width: 220, height: 220, 
-        colorDark : "#020617", // slate-950
-        colorLight : "#ffffff", 
-        correctLevel : QRCode.CorrectLevel.H 
+function createElement(tag, className, text) {
+    const element = document.createElement(tag);
+    if (className) element.className = className;
+    if (text !== undefined) element.textContent = text;
+    return element;
+}
+
+async function parseJsonResponse(response) {
+    const text = await response.text();
+    if (!text) return {};
+    try {
+        return JSON.parse(text);
+    } catch {
+        throw new Error('El servidor respondió en un formato inesperado.');
+    }
+}
+
+// Centraliza cookies, JSON y expiración de sesión sin reemplazar window.fetch.
+async function apiRequest(path, options = {}) {
+    const response = await fetch(path, {
+        credentials: 'same-origin',
+        ...options,
+        headers: options.body
+            ? { 'Content-Type': 'application/json', ...(options.headers || {}) }
+            : options.headers
     });
-}
+    const data = await parseJsonResponse(response);
 
-// ==========================================
-// 3. REGISTRO Y LOGIN (AUTH)
-// ==========================================
-document.getElementById('btn-registrar').addEventListener('click', async () => {
-    const telefono = document.getElementById('reg-telefono').value.trim();
-    const nombre = document.getElementById('reg-nombre').value.trim();
-    const password = document.getElementById('reg-password').value.trim();
-    
-    if (telefono.length !== 10 || isNaN(telefono)) return alert("Ingresa un número de 10 dígitos.");
-    if (nombre === '' || password === '') return alert("Completa todos los campos.");
-
-    const btn = document.getElementById('btn-registrar'); 
-    btn.innerText = "Registrando..."; btn.disabled = true;
-
-    try {
-        const respuesta = await fetch('/api/registro', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ telefono, nombre, password })
-        });
-        const data = await respuesta.json();
-
-        if (data.success) {
-            alert("¡Cuenta creada! Ya puedes iniciar sesión.");
-            document.getElementById('reg-telefono').value = ''; 
-            document.getElementById('reg-nombre').value = ''; 
-            document.getElementById('reg-password').value = '';
-            document.getElementById('link-login').click(); 
-        } else alert(data.error); 
-    } catch (error) { alert("Error al conectar."); }
-    btn.innerText = "Crear Cuenta"; btn.disabled = false;
-});
-
-document.getElementById('btn-entrar').addEventListener('click', async () => {
-    const username = document.getElementById('login-username').value.trim().toLowerCase();
-    const password = document.getElementById('login-password').value.trim();
-    if (username === '' || password === '') return alert("Ingresa datos");
-
-    const btn = document.getElementById('btn-entrar'); 
-    btn.innerText = "Verificando..."; btn.disabled = true;
-
-    try {
-        const respuesta = await fetch('/api/login', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username, password })
-        });
-        const data = await respuesta.json();
-
-        if (data.success) {
-            contenedorAcceso.classList.add('hidden'); 
-            if (data.usuario.rol === 'admin') {
-                pantallaAdmin.classList.remove('hidden');
-                iniciarEscanerAdmin();
-                cargarUsuariosAdmin(); // Cargar la tabla desde el inicio
-            } else {
-                usuarioLogueado = data.usuario.username;
-                pantallaUsuario.classList.remove('hidden');
-                document.getElementById('nombre-usuario').innerText = usuarioLogueado;
-                generarQRUsuario(usuarioLogueado);
-                cargarSaldoUsuario(usuarioLogueado);
-            }
-        } else alert(data.error); 
-    } catch (error) { alert("Error al conectar."); }
-    btn.innerText = "Entrar"; btn.disabled = false;
-});
-
-// ==========================================
-// 4. MODO ADMINISTRADOR (ESCANER Y FALLBACK)
-// ==========================================
-tabScanner.addEventListener('click', () => {
-    tabScanner.className = "flex-1 text-cyan-400 font-bold border-b-2 border-cyan-400 pb-2 focus:outline-none transition-all"; 
-    tabUsuarios.className = "flex-1 text-slate-400 font-bold pb-2 hover:text-cyan-300 focus:outline-none transition-all";
-    seccionAdminScanner.classList.remove('hidden'); seccionAdminUsuarios.classList.add('hidden');
-    iniciarEscanerAdmin();
-});
-
-tabUsuarios.addEventListener('click', async () => {
-    tabUsuarios.className = "flex-1 text-cyan-400 font-bold border-b-2 border-cyan-400 pb-2 focus:outline-none transition-all"; 
-    tabScanner.className = "flex-1 text-slate-400 font-bold pb-2 hover:text-cyan-300 focus:outline-none transition-all";
-    seccionAdminScanner.classList.add('hidden'); seccionAdminUsuarios.classList.remove('hidden');
-    
-    if (escanerActivo) { 
-        await escanerActivo.stop().catch(e=>console.log(e)); 
-        escanerActivo = null; 
-        lectorQrDiv.classList.remove('hidden'); 
-        formularioPuntos.classList.add('hidden'); 
-    }
-    cargarUsuariosAdmin();
-    cargarEventosAdmin();
-});
-
-function iniciarEscanerAdmin() {
-    if (escanerActivo) return; 
-    
-    escanerActivo = new Html5Qrcode("lector-qr");
-    escanerActivo.start({ facingMode: "environment" }, { fps: 10, qrbox: { width: 250, height: 250 } },
-        (textoDecodificado) => {
-            escanerActivo.stop(); escanerActivo = null; lectorQrDiv.classList.add('hidden'); 
-            try {
-                const datos = JSON.parse(textoDecodificado);
-                if (!datos.id_usuario) throw new Error();
-                idUsuarioEscaneado = datos.id_usuario;
-                document.getElementById('usuario-detectado').innerText = `Calificando a: ${idUsuarioEscaneado}`;
-                document.getElementById('input-canje').value = ''; 
-                cargarSaldoUsuario(idUsuarioEscaneado, true); 
-                formularioPuntos.classList.remove('hidden');
-            } catch (error) {
-                alert("QR Inválido."); lectorQrDiv.classList.remove('hidden'); iniciarEscanerAdmin();
-            }
-        }, () => {}
-    ).catch(err => {
-        // FALLBACK DE CÁMARA iOS (Degradación Elegante)
-        console.warn("Cámara restringida. Activando modo manual fotográfico.");
-        
-        lectorQrDiv.innerHTML = `
-            <div class="p-8 text-center h-full flex flex-col justify-center items-center">
-                <div class="w-16 h-16 bg-amber-500/20 rounded-full flex items-center justify-center mb-4 border border-amber-500/50">
-                    <span class="text-3xl">📷</span>
-                </div>
-                <p class="text-amber-400 font-bold mb-2 text-lg">Modo Manual Activo</p>
-                <p class="text-sm text-slate-400 mb-6">El escáner en vivo está restringido. Utiliza la asignación manual inferior o toma una fotografía al QR.</p>
-                
-                <label for="qr-foto-input" class="bg-slate-800 hover:bg-slate-700 border border-slate-600 text-cyan-300 font-bold py-3 px-6 rounded-xl cursor-pointer shadow-lg transition-all active:scale-95 w-full">
-                    📸 Subir / Tomar Foto al QR
-                </label>
-                <input type="file" id="qr-foto-input" accept="image/*" capture="environment" class="hidden">
-            </div>
-        `;
-        
-        // Listener para procesar la foto tomada
-        const fotoInput = document.getElementById('qr-foto-input');
-        if(fotoInput) {
-            fotoInput.addEventListener('change', (e) => {
-                if(e.target.files.length === 0) return;
-                
-                const file = e.target.files[0];
-                const tempScanner = new Html5Qrcode("lector-qr"); // Reutilizamos contenedor
-                
-                tempScanner.scanFile(file, true)
-                    .then(textoDecodificado => {
-                        try {
-                            const datos = JSON.parse(textoDecodificado);
-                            if (!datos.id_usuario) throw new Error();
-                            
-                            idUsuarioEscaneado = datos.id_usuario;
-                            document.getElementById('usuario-detectado').innerText = `Calificando a: ${idUsuarioEscaneado}`;
-                            document.getElementById('input-canje').value = ''; 
-                            cargarSaldoUsuario(idUsuarioEscaneado, true); 
-                            
-                            formularioPuntos.classList.remove('hidden');
-                            lectorQrDiv.classList.add('hidden');
-                        } catch (error) {
-                            alert("⚠️ El QR de la imagen no es válido para JC App.");
-                        }
-                    })
-                    .catch(err => {
-                        alert("❌ No se detectó ningún QR claro en la foto. Intenta acercarte más o usa la Asignación Manual.");
-                    });
-            });
-        }
-        cargarUsuariosAdmin();
-    });
-}
-
-// ==========================================
-// 5. OPERACIONES DE STAFF (TRANSACCIONES)
-// ==========================================
-async function enviarTransaccion(puntos, concepto, btnId) {
-    let targetUser = idUsuarioEscaneado;
-    
-    // CORRECCIÓN: Si es captura manual pura sin escanear previamente
-    if(btnId === 'btn-manual-puntos' && !targetUser) {
-        targetUser = prompt("Ingresa el número de teléfono (10 dígitos) del campista:");
-        if(!targetUser || targetUser.length !== 10) return alert("Número inválido. Operación cancelada.");
-    } else if (!targetUser) {
-        return alert("⚠️ Primero escanea un usuario o ingresa su número.");
-    }
-
-    const btn = document.getElementById(btnId);
-    const textoOriginal = btn.innerText;
-    btn.innerText = "Procesando..."; btn.disabled = true;
-
-    try {
-        const respuesta = await fetch('/api/transacciones', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username: targetUser, puntos: puntos, concepto: concepto })
-        });
-        const data = await respuesta.json();
-
-        if (respuesta.ok) {
-            alert(data.mensaje);
-        } else {
-            alert("Error: " + data.error); 
-        }
-    } catch (error) { alert("Error de red local."); }
-
-    btn.innerText = textoOriginal; btn.disabled = false;
-    
-    if(formularioPuntos && !formularioPuntos.classList.contains('hidden')) {
-        formularioPuntos.classList.add('hidden'); 
-        lectorQrDiv.classList.remove('hidden');
-        document.querySelectorAll('#formulario-puntos input[type="checkbox"]').forEach(chk => chk.checked = false);
-        iniciarEscanerAdmin();
-    }
-    cargarUsuariosAdmin(); 
-}
-
-// Sumar Recompensas Predefinidas
-document.getElementById('btn-guardar-puntos').addEventListener('click', () => {
-    let puntosTotales = 0;
-    document.querySelectorAll('#formulario-puntos input[type="checkbox"]:checked').forEach(chk => puntosTotales += parseInt(chk.value));
-    if (puntosTotales === 0) return alert("Selecciona al menos una recompensa.");
-    enviarTransaccion(puntosTotales, 'Ganancia por Asistencia', 'btn-guardar-puntos');
-});
-
-// Descontar por Churranga
-document.getElementById('btn-canjear-puntos').addEventListener('click', () => {
-    const puntosDescontar = parseInt(document.getElementById('input-canje').value);
-    if (isNaN(puntosDescontar) || puntosDescontar <= 0) return alert("Ingresa una cantidad válida a descontar.");
-    enviarTransaccion(-Math.abs(puntosDescontar), 'Canje en Tienda', 'btn-canjear-puntos');
-});
-
-// Puntos Manuales
-const btnManualPuntos = document.getElementById('btn-manual-puntos');
-if(btnManualPuntos) {
-    btnManualPuntos.addEventListener('click', () => {
-        const puntosExtra = parseInt(document.getElementById('input-puntos-manual').value);
-        const conceptoExtra = document.getElementById('input-concepto-manual').value.trim();
-
-        if (isNaN(puntosExtra) || puntosExtra === 0) return alert("⚠️ Ingresa una cantidad válida de puntos.");
-        if (!conceptoExtra) return alert("⚠️ Ingresa un motivo para la transacción.");
-
-        enviarTransaccion(puntosExtra, conceptoExtra, 'btn-manual-puntos');
-        
-        document.getElementById('input-puntos-manual').value = '';
-        document.getElementById('input-concepto-manual').value = '';
-    });
-}
-
-// ==========================================
-// 6. LISTA DE USUARIOS (TABLA ADMIN)
-// ==========================================
-async function cargarUsuariosAdmin() {
-    try {
-        const res = await fetch('/api/usuarios'); const usuarios = await res.json();
-        if (!res.ok) throw new Error(usuarios.error || 'No fue posible cargar los usuarios.');
-        badgeTotalUsuarios.innerText = `${usuarios.length} Usuarios`; 
-        tablaUsuariosCuerpo.innerHTML = '';
-        
-        usuarios.forEach(usr => {
-            // Se construye con textContent para no interpretar datos de usuarios como HTML.
-            const row = document.createElement('tr');
-            row.className = 'border-b border-white/5 hover:bg-white/5 transition-colors';
-            const infoCell = document.createElement('td');
-            infoCell.className = 'px-4 py-4';
-
-            const nombre = document.createElement('div');
-            nombre.className = 'font-bold text-white';
-            nombre.textContent = usr.nombre_completo;
-            const username = document.createElement('div');
-            username.className = 'text-xs text-slate-400';
-            username.textContent = usr.username;
-            const pointsWrap = document.createElement('div');
-            pointsWrap.className = 'mt-1';
-            const points = document.createElement('span');
-            points.className = 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-xs font-bold px-2 py-0.5 rounded shadow-sm';
-            points.textContent = `${usr.puntos_totales} pts ($${(usr.puntos_totales * 0.5).toFixed(2)})`;
-            pointsWrap.append(points);
-            infoCell.append(nombre, username, pointsWrap);
-
-            const actionCell = document.createElement('td');
-            actionCell.className = 'px-4 py-4 text-center';
-            const actions = document.createElement('div');
-            actions.className = 'flex flex-col gap-2 items-center';
-            const resetButton = document.createElement('button');
-            resetButton.type = 'button';
-            resetButton.className = 'bg-rose-500/20 text-rose-400 hover:bg-rose-500/40 font-bold py-1.5 px-3 rounded-lg border border-rose-500/30 transition-colors shadow-sm';
-            resetButton.textContent = 'Reset';
-            resetButton.addEventListener('click', () => resetearPassword(usr.username));
-            const deleteButton = document.createElement('button');
-            deleteButton.type = 'button';
-            deleteButton.className = 'bg-red-600/80 text-white hover:bg-red-500 font-bold py-1.5 px-3 rounded-lg border border-red-300/20 transition-colors shadow-sm';
-            deleteButton.textContent = 'Eliminar';
-            deleteButton.addEventListener('click', () => eliminarUsuario(usr.id, usr.nombre_completo));
-            actions.append(resetButton, deleteButton);
-            actionCell.append(actions);
-            row.append(infoCell, actionCell);
-            tablaUsuariosCuerpo.append(row);
-        });
-    } catch (e) { console.error("Error cargando tabla de usuarios"); }
-}
-
-async function resetearPassword(username) {
-    const newPassword = prompt(`Nueva contraseña temporal para ${username} (8 caracteres mínimo):`);
-    if (newPassword === null) return;
-    if (newPassword.length < 8) return alert("La contraseña debe tener al menos 8 caracteres.");
-    if (!confirm(`¿Confirmas el cambio de contraseña para ${username}?`)) return;
-    try {
-        const res = await fetch('/api/usuarios/reset-password', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username, newPassword })
-        });
-        const data = await res.json();
-        if (res.ok) { alert("Contraseña actualizada."); cargarUsuariosAdmin(); }
-        else alert(data.error || "No fue posible actualizar la contraseña.");
-    } catch (e) { alert("Error de red local."); }
-}
-
-async function eliminarUsuario(id, nombre) {
-    if (!confirm(`¿Eliminar definitivamente a ${nombre}? También se eliminará su historial de puntos.`)) return;
-
-    try {
-        const res = await fetch(`/api/usuarios/${encodeURIComponent(id)}`, { method: 'DELETE' });
-        const data = await res.json();
-        if (!res.ok) return alert(data.error || 'No fue posible eliminar el usuario.');
-
-        alert(data.mensaje);
-        cargarUsuariosAdmin();
-    } catch (error) {
-        alert('Error de red al eliminar el usuario.');
-    }
-}
-
-function obtenerControlesEventos() {
-    return {
-        form: document.getElementById('formulario-evento'),
-        title: document.getElementById('input-evento-titulo'),
-        date: document.getElementById('input-evento-fecha'),
-        submit: document.getElementById('btn-guardar-evento'),
-        cancel: document.getElementById('btn-cancelar-evento'),
-        list: document.getElementById('lista-eventos-admin'),
-        badge: document.getElementById('badge-total-eventos')
-    };
-}
-
-function fechaParaInput(fecha) {
-    const date = new Date(fecha);
-    if (Number.isNaN(date.getTime())) return '';
-    const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
-    return localDate.toISOString().slice(0, 16);
-}
-
-function limpiarFormularioEvento() {
-    const controls = obtenerControlesEventos();
-    eventoEditandoId = null;
-    controls.form.reset();
-    controls.submit.textContent = 'Agregar Evento';
-    controls.cancel.classList.add('hidden');
-}
-
-function editarEvento(evento) {
-    const controls = obtenerControlesEventos();
-    eventoEditandoId = evento.id;
-    controls.title.value = evento.titulo;
-    controls.date.value = fechaParaInput(evento.fecha);
-    controls.submit.textContent = 'Guardar Cambios';
-    controls.cancel.classList.remove('hidden');
-    controls.title.focus();
-}
-
-async function cambiarEstadoEvento(id, activo) {
-    try {
-        const res = await fetch(`/api/eventos/${encodeURIComponent(id)}/estado`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ activo })
-        });
-        const data = await res.json();
-        if (!res.ok) return alert(data.error || 'No fue posible actualizar el evento.');
-        cargarEventosAdmin();
-    } catch (error) {
-        alert('Error de red al actualizar el evento.');
-    }
-}
-
-async function cargarEventosAdmin() {
-    const controls = obtenerControlesEventos();
-    if (!controls.list) return;
-
-    try {
-        const res = await fetch('/api/eventos/admin');
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'No fue posible cargar los eventos.');
-
-        const eventos = data.eventos || [];
-        controls.badge.textContent = `${eventos.length} Eventos`;
-        controls.list.replaceChildren();
-
-        if (!eventos.length) {
-            const empty = document.createElement('p');
-            empty.className = 'text-xs text-slate-400 text-center py-2';
-            empty.textContent = 'Aún no hay eventos registrados.';
-            controls.list.append(empty);
-            return;
-        }
-
-        eventos.forEach((evento) => {
-            const item = document.createElement('div');
-            item.className = 'bg-slate-950/40 border border-white/10 rounded-xl p-3 flex flex-col gap-3';
-            const header = document.createElement('div');
-            header.className = 'flex items-start justify-between gap-3';
-            const detail = document.createElement('div');
-            const title = document.createElement('p');
-            title.className = 'font-semibold text-sm text-white';
-            title.textContent = evento.titulo;
-            const date = document.createElement('p');
-            date.className = 'text-xs text-slate-400 mt-1';
-            date.textContent = new Date(evento.fecha).toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' });
-            detail.append(title, date);
-            const status = document.createElement('span');
-            status.className = evento.activo
-                ? 'text-xs font-bold text-emerald-300 bg-emerald-500/15 border border-emerald-400/20 px-2 py-1 rounded-full'
-                : 'text-xs font-bold text-slate-400 bg-slate-600/30 border border-slate-500/30 px-2 py-1 rounded-full';
-            status.textContent = evento.activo ? 'Activo' : 'Inactivo';
-            header.append(detail, status);
-
-            const actions = document.createElement('div');
-            actions.className = 'flex gap-2';
-            const edit = document.createElement('button');
-            edit.type = 'button';
-            edit.className = 'flex-1 bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold py-2 px-3 rounded-lg transition';
-            edit.textContent = 'Editar';
-            edit.addEventListener('click', () => editarEvento(evento));
-            const toggle = document.createElement('button');
-            toggle.type = 'button';
-            toggle.className = evento.activo
-                ? 'flex-1 bg-amber-500/20 hover:bg-amber-500/35 text-amber-300 border border-amber-400/20 text-xs font-bold py-2 px-3 rounded-lg transition'
-                : 'flex-1 bg-emerald-500/20 hover:bg-emerald-500/35 text-emerald-300 border border-emerald-400/20 text-xs font-bold py-2 px-3 rounded-lg transition';
-            toggle.textContent = evento.activo ? 'Desactivar' : 'Activar';
-            toggle.addEventListener('click', () => cambiarEstadoEvento(evento.id, !evento.activo));
-            actions.append(edit, toggle);
-            item.append(header, actions);
-            controls.list.append(item);
-        });
-    } catch (error) {
-        controls.list.textContent = error.message;
-    }
-}
-
-const formularioEvento = document.getElementById('formulario-evento');
-if (formularioEvento) {
-    formularioEvento.addEventListener('submit', async (event) => {
-        event.preventDefault();
-        const controls = obtenerControlesEventos();
-        const payload = { titulo: controls.title.value.trim(), fecha: controls.date.value };
-        const isEditing = eventoEditandoId !== null;
-        const endpoint = isEditing ? `/api/eventos/${encodeURIComponent(eventoEditandoId)}` : '/api/eventos';
-        controls.submit.disabled = true;
-        controls.submit.textContent = 'Guardando…';
-
-        try {
-            const res = await fetch(endpoint, {
-                method: isEditing ? 'PUT' : 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-            const data = await res.json();
-            if (!res.ok) return alert(data.error || 'No fue posible guardar el evento.');
-
-            limpiarFormularioEvento();
-            cargarEventosAdmin();
-        } catch (error) {
-            alert('Error de red al guardar el evento.');
-        } finally {
-            controls.submit.disabled = false;
-            controls.submit.textContent = eventoEditandoId !== null ? 'Guardar Cambios' : 'Agregar Evento';
-        }
-    });
-
-    document.getElementById('btn-cancelar-evento').addEventListener('click', limpiarFormularioEvento);
-}
-
-// ==========================================
-// 7. UX: BOTONES MOSTRAR CONTRASEÑA (Refactorizado)
-// ==========================================
-function setupPasswordToggle(toggleId, inputId) {
-    const toggleBtn = document.getElementById(toggleId);
-    const passInput = document.getElementById(inputId);
-    if (toggleBtn && passInput) {
-        toggleBtn.addEventListener('click', function () {
-            const type = passInput.getAttribute('type') === 'password' ? 'text' : 'password';
-            passInput.setAttribute('type', type);
-            this.textContent = type === 'password' ? '👁️' : '🙈';
-        });
-    }
-}
-
-document.addEventListener('DOMContentLoaded', () => {
-    setupPasswordToggle('toggle-login-password', 'login-password');
-    setupPasswordToggle('toggle-reg-password', 'reg-password');
-});
-
-// ==========================================
-// 8. HOOKS CLOUD: SESIÓN, FECHAS Y VERSÍCULOS
-// No modifica los IDs existentes. Crea sus propios nodos con data-*.
-// ==========================================
-(() => {
-    const nativeFetch = window.fetch.bind(window);
-    let avisoSesionMostrado = false;
-    let contadorFechas = null;
-
-    function rutaApi(input) {
-        const url = input instanceof Request ? input.url : input;
-        return new URL(url, window.location.origin).pathname;
-    }
-
-    function mostrarLoginPorSesionExpirada() {
-        if (avisoSesionMostrado) return;
-        avisoSesionMostrado = true;
-
-        if (escanerActivo) {
-            escanerActivo.stop().catch(() => {});
-            escanerActivo = null;
-        }
-
-        usuarioLogueado = null;
-        pantallaUsuario.classList.add('hidden');
-        pantallaAdmin.classList.add('hidden');
-        contenedorAcceso.classList.remove('hidden');
-        pantallaRegistro.classList.add('hidden');
-        pantallaLogin.classList.remove('hidden');
+    if (response.status === 401 && state.user && path !== '/api/login') {
+        await showPublicView({ reloadLanding: true });
         alert('Tu sesión expiró. Inicia sesión nuevamente.');
     }
-
-    // Las cookies httpOnly viajan automáticamente en el mismo origen; este hook
-    // también centraliza la reacción al vencimiento del JWT en las llamadas existentes.
-    window.fetch = async (input, init = {}) => {
-        const response = await nativeFetch(input, { ...init, credentials: 'same-origin' });
-        const path = rutaApi(input);
-        const isPublicAuth = path === '/api/login' || path === '/api/registro';
-        if (response.status === 401 && !isPublicAuth) mostrarLoginPorSesionExpirada();
-        return response;
-    };
-
-    window.cerrarSesion = async () => {
-        try {
-            await fetch('/api/logout', { method: 'POST' });
-        } finally {
-            avisoSesionMostrado = false;
-            mostrarLoginPorSesionExpirada();
-            avisoSesionMostrado = false;
-        }
-    };
-
-    function crearElemento(tag, className, text) {
-        const element = document.createElement(tag);
-        if (className) element.className = className;
-        if (text !== undefined) element.textContent = text;
-        return element;
+    if (!response.ok) {
+        const error = new Error(data.error || data.message || 'No fue posible completar la solicitud.');
+        error.status = response.status;
+        throw error;
     }
+    return data;
+}
 
-    function actualizarContadores() {
-        document.querySelectorAll('[data-jc-countdown]').forEach((element) => {
-            const remaining = Number(element.dataset.jcCountdown) - Date.now();
-            if (remaining <= 0) {
-                element.textContent = '¡Ya comenzó!';
-                return;
-            }
+// ==========================================
+// SESIÓN: FUENTE ÚNICA DE VERDAD
+// ==========================================
+async function stopScanner() {
+    if (!state.scanner) return;
+    await state.scanner.stop().catch(() => {});
+    state.scanner = null;
+}
 
-            const totalMinutes = Math.floor(remaining / 60000);
-            const days = Math.floor(totalMinutes / 1440);
-            const hours = Math.floor((totalMinutes % 1440) / 60);
-            const minutes = totalMinutes % 60;
-            element.textContent = `${days}d ${hours}h ${minutes}m`;
-        });
+function setWidgetsVisible(visible) {
+    dom.widgets.classList.toggle('hidden', !visible);
+    dom.widgets.setAttribute('aria-hidden', String(!visible));
+    if (!visible && state.countdownTimer) {
+        clearInterval(state.countdownTimer);
+        state.countdownTimer = null;
     }
+    if (visible) loadDashboardWidgets();
+}
 
-    function renderizarFechas(container, fechas) {
-        container.replaceChildren();
-        if (!fechas.length) {
-            container.append(crearElemento('p', 'text-xs text-slate-400', 'Próximamente anunciaremos las fechas del campamento.'));
+// Restaura el estado público completo y limpia todas las referencias privadas.
+async function showPublicView({ reloadLanding = false } = {}) {
+    await stopScanner();
+    state.user = null;
+    state.scannedUsername = null;
+    state.activeAdminTab = 'scanner';
+    clearEventForm();
+
+    dom.userView.classList.add('hidden');
+    dom.adminView.classList.add('hidden');
+    dom.sessionBar.classList.add('hidden');
+    dom.sessionBar.classList.remove('flex');
+    dom.publicView.classList.remove('hidden');
+    dom.access.classList.remove('hidden');
+    showLoginForm();
+    setWidgetsVisible(false);
+
+    if (reloadLanding) await loadPublicLanding();
+}
+
+// Reconstruye Dashboard y Logout usando exclusivamente el usuario del JWT.
+async function showAuthenticatedDashboard(user) {
+    state.user = user;
+    dom.publicView.classList.add('hidden');
+    dom.access.classList.add('hidden');
+    dom.sessionIdentity.textContent = `${user.username} · ${isAdmin(user) ? 'Admin' : 'Participante'}`;
+    dom.sessionBar.classList.remove('hidden');
+    dom.sessionBar.classList.add('flex');
+
+    if (isAdmin(user)) {
+        dom.userView.classList.add('hidden');
+        dom.adminView.classList.remove('hidden');
+        await activateAdminTab('scanner');
+    } else {
+        dom.adminView.classList.add('hidden');
+        dom.userView.classList.remove('hidden');
+        $('nombre-usuario').textContent = user.username;
+        generateUserQr(user.username);
+        loadUserBalance(user.username);
+    }
+    setWidgetsVisible(true);
+}
+
+// checkSession se ejecuta en cada carga/F5. La cookie httpOnly decide la vista.
+async function checkSession() {
+    try {
+        const response = await fetch('/api/auth/me', { credentials: 'same-origin' });
+        const data = await parseJsonResponse(response);
+        if (!response.ok || !data.usuario) throw new Error('Sin sesión');
+        await showAuthenticatedDashboard(data.usuario);
+    } catch {
+        await showPublicView({ reloadLanding: false });
+    }
+}
+
+async function logout() {
+    const originalText = dom.logoutButton.textContent;
+    dom.logoutButton.disabled = true;
+    dom.logoutButton.textContent = 'Saliendo…';
+    try {
+        await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' });
+    } catch (error) {
+        console.warn('No fue posible confirmar el logout:', error);
+    } finally {
+        await showPublicView({ reloadLanding: true });
+        dom.logoutButton.disabled = false;
+        dom.logoutButton.textContent = originalText;
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+}
+
+// ==========================================
+// LANDING PÚBLICA
+// ==========================================
+function resetFeaturedEvent() {
+    $('landing-titulo').textContent = 'El Campamento';
+    $('landing-lema').textContent = 'Muy pronto conocerás todos los detalles.';
+    $('landing-fecha').textContent = 'Por anunciar';
+    $('landing-costo').textContent = 'Por anunciar';
+    $('landing-lugar').textContent = 'Por anunciar';
+    $('landing-telefono').textContent = 'Por anunciar';
+    $('landing-telefono').href = '#acceso';
+    $('landing-imagen').src = 'campamento-logo.svg';
+}
+
+function renderFeaturedEvent(event) {
+    if (!event) {
+        resetFeaturedEvent();
+        return;
+    }
+    $('landing-titulo').textContent = event.titulo;
+    $('landing-lema').textContent = event.lema || 'Una experiencia para crecer juntos.';
+    $('landing-fecha').textContent = formatDate(event.fecha);
+    $('landing-costo').textContent = event.costo || 'Por anunciar';
+    $('landing-lugar').textContent = event.lugar || 'Por anunciar';
+    $('landing-telefono').textContent = event.telefono || 'Por anunciar';
+    $('landing-telefono').href = event.telefono ? `tel:${event.telefono.replace(/[^\d+]/g, '')}` : '#acceso';
+    $('landing-imagen').src = event.imagen || 'campamento-logo.svg';
+}
+
+function createAgendaCard(event) {
+    const card = createElement('article', 'glass-card rounded-2xl border border-white/10 p-4');
+    const eyebrow = createElement('p', 'text-[.68rem] font-bold uppercase tracking-widest text-violet-300', 'Evento especial');
+    const title = createElement('h3', 'mt-1 text-lg font-extrabold text-white', event.titulo);
+    const date = createElement('p', 'mt-3 text-sm font-semibold text-cyan-200', formatDate(event.fecha, { dateStyle: 'medium', timeStyle: 'short' }));
+    card.append(eyebrow, title, date);
+    if (event.lugar) card.append(createElement('p', 'mt-2 text-xs text-slate-400', event.lugar));
+    return card;
+}
+
+// La Landing usa sólo el endpoint público, que ya filtra activo = true.
+async function loadPublicLanding() {
+    const agenda = $('landing-agenda');
+    try {
+        const data = await apiRequest('/api/eventos');
+        const events = data.eventos || [];
+        renderFeaturedEvent(events.find((event) => event.es_estelar === true));
+        const secondaryEvents = events.filter((event) => event.es_estelar !== true);
+        agenda.replaceChildren();
+        if (!secondaryEvents.length) {
+            agenda.append(createElement('p', 'text-sm text-slate-400 sm:col-span-2 lg:col-span-3', 'Próximamente anunciaremos nuevas actividades.'));
             return;
         }
+        secondaryEvents.forEach((event) => agenda.append(createAgendaCard(event)));
+    } catch (error) {
+        resetFeaturedEvent();
+        agenda.replaceChildren(createElement('p', 'text-sm text-rose-200 sm:col-span-2 lg:col-span-3', error.message));
+    }
+}
 
-        const fragment = document.createDocumentFragment();
-        fechas.forEach(({ titulo, fecha }) => {
-            const date = new Date(fecha);
-            const item = crearElemento('div', 'flex items-center justify-between gap-3 py-2 border-b border-white/5 last:border-0');
-            const detail = crearElemento('div');
-            detail.append(
-                crearElemento('p', 'font-semibold text-slate-100 text-sm', titulo),
-                crearElemento('p', 'text-xs text-slate-400', date.toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' }))
+// ==========================================
+// LOGIN Y REGISTRO
+// ==========================================
+function showLoginForm() {
+    dom.registerForm.classList.add('hidden');
+    dom.loginForm.classList.remove('hidden');
+}
+
+function showRegisterForm() {
+    dom.loginForm.classList.add('hidden');
+    dom.registerForm.classList.remove('hidden');
+}
+
+async function handleLogin(event) {
+    event.preventDefault();
+    const username = $('login-username').value.trim().toLowerCase();
+    const password = $('login-password').value;
+    const button = $('btn-entrar');
+    button.disabled = true;
+    button.textContent = 'Verificando…';
+    try {
+        const data = await apiRequest('/api/login', {
+            method: 'POST',
+            body: JSON.stringify({ username, password })
+        });
+        dom.loginForm.reset();
+        await showAuthenticatedDashboard(data.usuario);
+    } catch (error) {
+        alert(error.message);
+    } finally {
+        button.disabled = false;
+        button.textContent = 'Entrar';
+    }
+}
+
+async function handleRegister(event) {
+    event.preventDefault();
+    const telefono = $('reg-telefono').value.trim();
+    const nombre = $('reg-nombre').value.trim();
+    const password = $('reg-password').value;
+    if (!/^\d{10}$/.test(telefono)) return alert('Ingresa un teléfono de 10 dígitos.');
+
+    const button = $('btn-registrar');
+    button.disabled = true;
+    button.textContent = 'Registrando…';
+    try {
+        await apiRequest('/api/registro', {
+            method: 'POST',
+            body: JSON.stringify({ telefono, nombre, password })
+        });
+        dom.registerForm.reset();
+        showLoginForm();
+        alert('Cuenta creada. Ya puedes iniciar sesión.');
+    } catch (error) {
+        alert(error.message);
+    } finally {
+        button.disabled = false;
+        button.textContent = 'Crear cuenta';
+    }
+}
+
+function setupPasswordToggle(buttonId, inputId) {
+    const button = $(buttonId);
+    const input = $(inputId);
+    button.addEventListener('click', () => {
+        const show = input.type === 'password';
+        input.type = show ? 'text' : 'password';
+        button.textContent = show ? '🙈' : '👁️';
+        button.setAttribute('aria-label', show ? 'Ocultar contraseña' : 'Mostrar contraseña');
+    });
+}
+
+// ==========================================
+// DASHBOARD DE USUARIO
+// ==========================================
+function generateUserQr(username) {
+    const container = $('qr-contenedor');
+    container.replaceChildren();
+    new QRCode(container, {
+        text: JSON.stringify({ id_usuario: username }),
+        width: 220,
+        height: 220,
+        colorDark: '#020617',
+        colorLight: '#ffffff',
+        correctLevel: QRCode.CorrectLevel.H
+    });
+}
+
+async function loadUserBalance(username, adminMode = false) {
+    try {
+        const data = await apiRequest(`/api/usuarios/${encodeURIComponent(username)}`);
+        const equivalent = (Number(data.puntos) * 0.5).toFixed(2);
+        if (adminMode) {
+            $('admin-saldo-usuario').textContent = data.puntos;
+            $('admin-saldo-mxn').textContent = equivalent;
+        } else {
+            $('saldo-usuario').textContent = data.puntos;
+            $('saldo-mxn').textContent = equivalent;
+        }
+    } catch (error) {
+        console.error('Error al cargar el saldo:', error);
+    }
+}
+
+// ==========================================
+// NAVEGACIÓN Y ESCÁNER ADMIN
+// ==========================================
+const adminTabs = {
+    scanner: { button: dom.scannerTab, panel: dom.scannerPanel },
+    users: { button: dom.usersTab, panel: dom.usersPanel },
+    events: { button: dom.eventsTab, panel: dom.eventsPanel }
+};
+
+async function activateAdminTab(tabId) {
+    if (!isAdmin()) return;
+    state.activeAdminTab = tabId;
+    Object.entries(adminTabs).forEach(([id, tab]) => {
+        const active = id === tabId;
+        tab.button.setAttribute('aria-selected', String(active));
+        tab.button.tabIndex = active ? 0 : -1;
+        tab.panel.classList.toggle('hidden', !active);
+    });
+
+    if (tabId === 'scanner') return startScanner();
+    await stopScanner();
+    if (tabId === 'users') loadAdminUsers();
+    if (tabId === 'events') loadAdminEvents();
+}
+
+function handleDecodedQr(decodedText) {
+    try {
+        const data = JSON.parse(decodedText);
+        if (!data.id_usuario) throw new Error('QR inválido');
+        state.scannedUsername = data.id_usuario;
+        $('usuario-detectado').textContent = `Calificando a: ${state.scannedUsername}`;
+        $('input-canje').value = '';
+        loadUserBalance(state.scannedUsername, true);
+        dom.scanner.classList.add('hidden');
+        dom.pointsForm.classList.remove('hidden');
+    } catch {
+        alert('El QR no pertenece a JC App.');
+    }
+}
+
+function renderScannerFallback() {
+    dom.scanner.innerHTML = '<div class="p-7 text-center"><p class="text-3xl">📷</p><p class="mt-3 font-bold text-amber-300">Cámara no disponible</p><p class="mt-2 text-sm text-slate-400">Puedes usar la asignación manual desde este panel.</p></div>';
+}
+
+async function startScanner() {
+    if (state.scanner || state.activeAdminTab !== 'scanner' || !isAdmin()) return;
+    if (typeof Html5Qrcode !== 'function') return renderScannerFallback();
+    dom.scanner.classList.remove('hidden');
+    dom.pointsForm.classList.add('hidden');
+    state.scanner = new Html5Qrcode('lector-qr');
+    try {
+        await state.scanner.start(
+            { facingMode: 'environment' },
+            { fps: 10, qrbox: { width: 250, height: 250 } },
+            async (text) => {
+                await stopScanner();
+                handleDecodedQr(text);
+            },
+            () => {}
+        );
+    } catch {
+        state.scanner = null;
+        renderScannerFallback();
+    }
+}
+
+// ==========================================
+// PUNTOS Y USUARIOS ADMIN
+// ==========================================
+async function sendTransaction(points, concept, buttonId) {
+    let username = state.scannedUsername;
+    if (buttonId === 'btn-manual-puntos' && !username) {
+        username = prompt('Teléfono del campista (10 dígitos):');
+    }
+    if (!/^\d{10}$/.test(username || '')) return alert('Selecciona o ingresa un usuario válido.');
+
+    const button = $(buttonId);
+    const originalText = button.textContent;
+    button.disabled = true;
+    button.textContent = 'Procesando…';
+    try {
+        const data = await apiRequest('/api/transacciones', {
+            method: 'POST',
+            body: JSON.stringify({ username, puntos: points, concepto: concept })
+        });
+        alert(data.mensaje);
+    } catch (error) {
+        alert(error.message);
+    } finally {
+        button.disabled = false;
+        button.textContent = originalText;
+    }
+}
+
+async function loadAdminUsers() {
+    if (!isAdmin()) return;
+    try {
+        const users = await apiRequest('/api/usuarios');
+        dom.usersBadge.textContent = `${users.length} usuarios`;
+        dom.usersBody.replaceChildren();
+        users.forEach((user) => {
+            const row = createElement('tr', 'border-b border-white/5');
+            const info = createElement('td', 'px-4 py-4');
+            info.append(
+                createElement('p', 'font-bold text-white', user.nombre_completo),
+                createElement('p', 'text-xs text-slate-400', user.username),
+                createElement('p', 'mt-1 text-xs font-bold text-emerald-300', `${user.puntos_totales} pts · $${(user.puntos_totales * 0.5).toFixed(2)}`)
             );
-            const countdown = crearElemento('span', 'text-xs font-bold text-cyan-300 whitespace-nowrap');
-            countdown.dataset.jcCountdown = String(date.getTime());
-            item.append(detail, countdown);
-            fragment.append(item);
+            const actionsCell = createElement('td', 'px-4 py-4');
+            const actions = createElement('div', 'flex justify-center gap-2');
+            const passwordButton = createElement('button', 'rounded-lg bg-violet-500/20 px-3 py-2 text-xs font-bold text-violet-200', 'Cambiar contraseña');
+            passwordButton.type = 'button';
+            passwordButton.addEventListener('click', () => resetPassword(user.username));
+            const deleteButton = createElement('button', 'rounded-lg bg-rose-600 px-3 py-2 text-xs font-bold text-white', 'Eliminar');
+            deleteButton.type = 'button';
+            deleteButton.addEventListener('click', () => deleteUser(user.id, user.nombre_completo));
+            actions.append(passwordButton, deleteButton);
+            actionsCell.append(actions);
+            row.append(info, actionsCell);
+            dom.usersBody.append(row);
         });
-        container.append(fragment);
-        actualizarContadores();
+    } catch (error) {
+        alert(error.message);
     }
+}
 
-    async function cargarFechasJC(container) {
-        const response = await fetch('/api/eventos');
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || 'No fue posible cargar los eventos.');
-        renderizarFechas(container, data.eventos || []);
+async function resetPassword(username) {
+    const newPassword = prompt(`Nueva contraseña temporal para ${username}:`);
+    if (newPassword === null) return;
+    if (newPassword.length < 8) return alert('La contraseña debe tener al menos 8 caracteres.');
+    try {
+        await apiRequest('/api/usuarios/reset-password', {
+            method: 'POST',
+            body: JSON.stringify({ username, newPassword })
+        });
+        alert('Contraseña actualizada.');
+    } catch (error) {
+        alert(error.message);
     }
+}
 
-    async function cargarVersiculoJC(target) {
-        target.textContent = 'Cargando versículo…';
-        const response = await fetch('/api/versiculos');
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || 'No fue posible cargar el versículo.');
-        // textContent evita interpretar contenido de la hoja como HTML.
+async function deleteUser(id, name) {
+    if (!confirm(`¿Eliminar definitivamente a ${name}?`)) return;
+    try {
+        await apiRequest(`/api/usuarios/${encodeURIComponent(id)}`, { method: 'DELETE' });
+        loadAdminUsers();
+    } catch (error) {
+        alert(error.message);
+    }
+}
+
+// ==========================================
+// CRUD COMPLETO DE EVENTOS
+// ==========================================
+const eventControls = {
+    form: $('formulario-evento'),
+    title: $('input-evento-titulo'),
+    date: $('input-evento-fecha'),
+    cost: $('input-evento-costo'),
+    slogan: $('input-evento-lema'),
+    place: $('input-evento-lugar'),
+    phone: $('input-evento-telefono'),
+    image: $('input-evento-imagen'),
+    featured: $('input-evento-estelar'),
+    submit: $('btn-guardar-evento'),
+    cancel: $('btn-cancelar-evento'),
+    previewWrap: $('contenedor-preview-evento'),
+    preview: $('preview-evento-imagen'),
+    previewName: $('preview-evento-nombre'),
+    removeImage: $('btn-quitar-imagen-evento'),
+    featuredCard: $('evento-campamento-admin'),
+    list: $('lista-eventos-admin'),
+    badge: $('badge-total-eventos')
+};
+
+function dateForInput(value) {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+}
+
+function showEventImagePreview(source, name = 'Imagen actual') {
+    if (!source) {
+        eventControls.previewWrap.classList.add('hidden');
+        eventControls.previewWrap.classList.remove('flex');
+        eventControls.preview.removeAttribute('src');
+        eventControls.previewName.textContent = '';
+        return;
+    }
+    eventControls.preview.src = source;
+    eventControls.previewName.textContent = name;
+    eventControls.previewWrap.classList.remove('hidden');
+    eventControls.previewWrap.classList.add('flex');
+}
+
+function updateFeaturedRequirements() {
+    const required = eventControls.featured.checked;
+    [eventControls.cost, eventControls.slogan, eventControls.place, eventControls.phone].forEach((input) => {
+        input.required = required;
+    });
+    eventControls.image.required = required && !state.currentEventImage && !state.eventImageData;
+}
+
+// Limpia tanto el formulario como los datos Base64 que nunca deben sobrevivir a otra edición.
+function clearEventForm() {
+    if (!eventControls.form) return;
+    state.editingEventId = null;
+    state.eventImageData = undefined;
+    state.currentEventImage = null;
+    eventControls.form.reset();
+    eventControls.submit.textContent = 'Crear evento';
+    eventControls.cancel.classList.add('hidden');
+    showEventImagePreview(null);
+    updateFeaturedRequirements();
+}
+
+function fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(new Error('No fue posible leer la imagen.'));
+        reader.readAsDataURL(file);
+    });
+}
+
+// Convierte la imagen en el navegador y replica los límites del backend.
+async function handleEventImage(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    if (!ALLOWED_IMAGE_TYPES.has(file.type)) {
+        eventControls.image.value = '';
+        return alert('Usa una imagen PNG, JPEG, WEBP o GIF.');
+    }
+    if (file.size > MAX_IMAGE_BYTES) {
+        eventControls.image.value = '';
+        return alert('La imagen no debe superar 1.5 MB.');
+    }
+    try {
+        state.eventImageData = await fileToBase64(file);
+        showEventImagePreview(state.eventImageData, file.name);
+        updateFeaturedRequirements();
+    } catch (error) {
+        alert(error.message);
+    }
+}
+
+function editEvent(event) {
+    state.editingEventId = event.id;
+    state.eventImageData = undefined;
+    state.currentEventImage = event.imagen || null;
+    eventControls.title.value = event.titulo || '';
+    eventControls.date.value = dateForInput(event.fecha);
+    eventControls.cost.value = event.costo || '';
+    eventControls.slogan.value = event.lema || '';
+    eventControls.place.value = event.lugar || '';
+    eventControls.phone.value = event.telefono || '';
+    eventControls.featured.checked = event.es_estelar === true;
+    eventControls.submit.textContent = 'Guardar cambios';
+    eventControls.cancel.classList.remove('hidden');
+    showEventImagePreview(event.imagen, 'Imagen actual');
+    updateFeaturedRequirements();
+    eventControls.form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    eventControls.title.focus({ preventScroll: true });
+}
+
+function buildEventPayload() {
+    const payload = {
+        titulo: eventControls.title.value.trim(),
+        fecha: eventControls.date.value,
+        costo: eventControls.cost.value.trim() || null,
+        lema: eventControls.slogan.value.trim() || null,
+        lugar: eventControls.place.value.trim() || null,
+        telefono: eventControls.phone.value.trim() || null,
+        es_estelar: eventControls.featured.checked
+    };
+
+    // undefined en PUT conserva la imagen; null la elimina explícitamente.
+    if (state.editingEventId === null || state.eventImageData !== undefined) {
+        payload.imagen = state.eventImageData ?? null;
+    }
+    return payload;
+}
+
+function validateFeaturedEvent(payload) {
+    if (!payload.es_estelar) return true;
+    const otherFeatured = state.events.find((event) => event.es_estelar === true && event.id !== state.editingEventId);
+    if (otherFeatured) {
+        alert(`Ya existe un evento estelar: ${otherFeatured.titulo}. Edítalo o elimínalo antes de crear otro.`);
+        return false;
+    }
+    return true;
+}
+
+async function saveEvent(event) {
+    event.preventDefault();
+    if (!isAdmin()) return alert('Tu sesión no tiene permisos de administrador.');
+    updateFeaturedRequirements();
+    if (!eventControls.form.reportValidity()) return;
+
+    const payload = buildEventPayload();
+    if (!validateFeaturedEvent(payload)) return;
+    const editing = state.editingEventId !== null;
+    const endpoint = editing ? `/api/eventos/${encodeURIComponent(state.editingEventId)}` : '/api/eventos';
+    eventControls.submit.disabled = true;
+    eventControls.submit.textContent = 'Guardando…';
+    try {
+        await apiRequest(endpoint, {
+            method: editing ? 'PUT' : 'POST',
+            body: JSON.stringify(payload)
+        });
+        clearEventForm();
+        await Promise.all([loadAdminEvents(), loadPublicLanding()]);
+    } catch (error) {
+        alert(error.message);
+    } finally {
+        eventControls.submit.disabled = false;
+        eventControls.submit.textContent = state.editingEventId === null ? 'Crear evento' : 'Guardar cambios';
+    }
+}
+
+async function deleteEvent(event) {
+    if (!isAdmin()) return;
+    if (!confirm(`¿Eliminar definitivamente “${event.titulo}”? Esta acción no se puede deshacer.`)) return;
+    try {
+        await apiRequest(`/api/eventos/${encodeURIComponent(event.id)}`, { method: 'DELETE' });
+        if (state.editingEventId === event.id) clearEventForm();
+        await Promise.all([loadAdminEvents(), loadPublicLanding()]);
+    } catch (error) {
+        alert(error.message);
+    }
+}
+
+async function toggleEventStatus(event) {
+    try {
+        await apiRequest(`/api/eventos/${encodeURIComponent(event.id)}/estado`, {
+            method: 'PATCH',
+            body: JSON.stringify({ activo: !event.activo })
+        });
+        await Promise.all([loadAdminEvents(), loadPublicLanding()]);
+    } catch (error) {
+        alert(error.message);
+    }
+}
+
+function createEventActions(event) {
+    const actions = createElement('div', 'mt-3 grid grid-cols-3 gap-2');
+    const edit = createElement('button', 'rounded-lg bg-slate-700 px-2 py-2 text-xs font-bold hover:bg-slate-600', 'Editar');
+    const status = createElement('button', event.activo ? 'rounded-lg bg-amber-500/20 px-2 py-2 text-xs font-bold text-amber-200' : 'rounded-lg bg-emerald-500/20 px-2 py-2 text-xs font-bold text-emerald-200', event.activo ? 'Ocultar' : 'Publicar');
+    const remove = createElement('button', 'rounded-lg bg-rose-600 px-2 py-2 text-xs font-bold text-white hover:bg-rose-500', 'Eliminar');
+    [edit, status, remove].forEach((button) => { button.type = 'button'; });
+    edit.addEventListener('click', () => editEvent(event));
+    status.addEventListener('click', () => toggleEventStatus(event));
+    remove.addEventListener('click', () => deleteEvent(event));
+    actions.append(edit, status, remove);
+    return actions;
+}
+
+function createAdminEventCard(event, featured = false) {
+    const card = createElement('article', featured
+        ? 'rounded-2xl border border-fuchsia-400/25 bg-gradient-to-br from-violet-950/70 to-cyan-950/45 p-4'
+        : 'rounded-2xl border border-white/10 bg-slate-950/40 p-4');
+    const header = createElement('div', 'flex items-start justify-between gap-3');
+    const detail = createElement('div');
+    detail.append(
+        createElement('p', 'font-extrabold text-white', event.titulo),
+        createElement('p', 'mt-1 text-xs text-cyan-200', formatDate(event.fecha, { dateStyle: 'medium', timeStyle: 'short' }))
+    );
+    const badge = createElement('span', event.activo ? 'rounded-full bg-emerald-500/15 px-2 py-1 text-[.68rem] font-bold text-emerald-200' : 'rounded-full bg-slate-600/30 px-2 py-1 text-[.68rem] font-bold text-slate-300', event.activo ? 'Publicado' : 'Oculto');
+    header.append(detail, badge);
+    card.append(header);
+    if (featured) {
+        const meta = [event.costo, event.lugar, event.telefono].filter(Boolean).join(' · ');
+        if (event.lema) card.append(createElement('p', 'mt-3 text-sm italic text-fuchsia-100', event.lema));
+        if (meta) card.append(createElement('p', 'mt-2 text-xs text-slate-300', meta));
+    }
+    card.append(createEventActions(event));
+    return card;
+}
+
+async function loadAdminEvents() {
+    if (!isAdmin()) return;
+    try {
+        const data = await apiRequest('/api/eventos/admin');
+        state.events = data.eventos || [];
+        const featured = state.events.find((event) => event.es_estelar === true);
+        const common = state.events.filter((event) => event.es_estelar !== true);
+        eventControls.badge.textContent = `${state.events.length} eventos`;
+        eventControls.featuredCard.replaceChildren();
+        eventControls.list.replaceChildren();
+
+        if (featured) {
+            eventControls.featuredCard.append(createElement('p', 'mb-2 text-xs font-black uppercase tracking-widest text-fuchsia-300', 'Evento estelar'));
+            eventControls.featuredCard.append(createAdminEventCard(featured, true));
+        } else {
+            eventControls.featuredCard.append(createElement('p', 'rounded-xl border border-dashed border-white/15 p-4 text-sm text-slate-400', 'No hay un evento estelar configurado.'));
+        }
+        if (!common.length) {
+            eventControls.list.append(createElement('p', 'text-sm text-slate-400 sm:col-span-2', 'No hay eventos complementarios.'));
+        } else {
+            common.forEach((event) => eventControls.list.append(createAdminEventCard(event)));
+        }
+    } catch (error) {
+        eventControls.list.replaceChildren(createElement('p', 'text-sm text-rose-200', error.message));
+    }
+}
+
+// ==========================================
+// WIDGETS PRIVADOS
+// ==========================================
+function updateCountdowns() {
+    document.querySelectorAll('[data-countdown]').forEach((element) => {
+        const remaining = Number(element.dataset.countdown) - Date.now();
+        if (remaining <= 0) return element.textContent = '¡Ya comenzó!';
+        const minutes = Math.floor(remaining / 60000);
+        element.textContent = `${Math.floor(minutes / 1440)}d ${Math.floor((minutes % 1440) / 60)}h ${minutes % 60}m`;
+    });
+}
+
+async function loadVerse() {
+    const target = $('versiculo-dashboard');
+    target.textContent = 'Cargando…';
+    try {
+        const data = await apiRequest('/api/versiculos');
         target.textContent = data.versiculo;
+    } catch (error) {
+        target.textContent = error.message;
     }
+}
 
-    function montarWidgetsCloud() {
-        const shell = document.querySelector('.app-shell');
-        if (!shell || shell.querySelector('[data-jc-cloud-widgets]')) return;
-
-        const section = crearElemento('section', 'mt-6 space-y-4 text-left', undefined);
-        section.dataset.jcCloudWidgets = 'true';
-
-        const verseCard = crearElemento('article', 'bg-slate-800/60 border border-violet-400/20 rounded-2xl p-4 shadow-lg');
-        verseCard.append(crearElemento('h2', 'text-xs uppercase tracking-widest font-bold text-violet-300 mb-2', 'Versículo del día'));
-        const verseText = crearElemento('p', 'text-sm leading-relaxed text-slate-200 min-h-12');
-        const refreshVerse = crearElemento('button', 'mt-3 text-xs font-bold text-cyan-300 hover:text-cyan-200 transition-colors', 'Otro versículo');
-        refreshVerse.type = 'button';
-        refreshVerse.addEventListener('click', async () => {
-            refreshVerse.disabled = true;
-            try {
-                await cargarVersiculoJC(verseText);
-            } catch (error) {
-                verseText.textContent = error.message;
-            } finally {
-                refreshVerse.disabled = false;
-            }
+async function loadImportantDates() {
+    const target = $('fechas-dashboard');
+    try {
+        const data = await apiRequest('/api/eventos');
+        target.replaceChildren();
+        (data.eventos || []).slice(0, 4).forEach((event) => {
+            const row = createElement('div', 'flex items-center justify-between gap-3 border-b border-white/5 py-2 last:border-0');
+            const detail = createElement('div');
+            detail.append(createElement('p', 'text-sm font-semibold', event.titulo), createElement('p', 'text-xs text-slate-400', formatDate(event.fecha, { dateStyle: 'medium', timeStyle: 'short' })));
+            const countdown = createElement('span', 'whitespace-nowrap text-xs font-bold text-cyan-300');
+            countdown.dataset.countdown = String(new Date(event.fecha).getTime());
+            row.append(detail, countdown);
+            target.append(row);
         });
-        verseCard.append(verseText, refreshVerse);
-
-        const datesCard = crearElemento('article', 'bg-slate-800/60 border border-cyan-400/20 rounded-2xl p-4 shadow-lg');
-        datesCard.append(crearElemento('h2', 'text-xs uppercase tracking-widest font-bold text-cyan-300 mb-2', 'Fechas importantes'));
-        const datesList = crearElemento('div', 'space-y-1');
-        datesCard.append(datesList);
-
-        section.append(verseCard, datesCard);
-        shell.append(section);
-
-        cargarVersiculoJC(verseText).catch((error) => { verseText.textContent = error.message; });
-        cargarFechasJC(datesList).catch((error) => { datesList.textContent = error.message; });
-
-        if (contadorFechas) window.clearInterval(contadorFechas);
-        contadorFechas = window.setInterval(actualizarContadores, 60000);
+        updateCountdowns();
+    } catch (error) {
+        target.textContent = error.message;
     }
+}
 
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', montarWidgetsCloud, { once: true });
-    } else {
-        montarWidgetsCloud();
-    }
-})();
+function loadDashboardWidgets() {
+    loadVerse();
+    loadImportantDates();
+    if (state.countdownTimer) clearInterval(state.countdownTimer);
+    state.countdownTimer = setInterval(updateCountdowns, 60000);
+}
+
+// ==========================================
+// EVENTOS DEL DOM Y ARRANQUE
+// ==========================================
+function bindEvents() {
+    dom.loginForm.addEventListener('submit', handleLogin);
+    dom.registerForm.addEventListener('submit', handleRegister);
+    dom.logoutButton.addEventListener('click', logout);
+    $('link-registro').addEventListener('click', (event) => { event.preventDefault(); showRegisterForm(); });
+    $('link-login').addEventListener('click', (event) => { event.preventDefault(); showLoginForm(); });
+    $('btn-actualizar-saldo').addEventListener('click', () => state.user && loadUserBalance(state.user.username));
+    $('btn-otro-versiculo').addEventListener('click', loadVerse);
+    setupPasswordToggle('toggle-login-password', 'login-password');
+    setupPasswordToggle('toggle-reg-password', 'reg-password');
+
+    dom.scannerTab.addEventListener('click', () => activateAdminTab('scanner'));
+    dom.usersTab.addEventListener('click', () => activateAdminTab('users'));
+    dom.eventsTab.addEventListener('click', () => activateAdminTab('events'));
+    Object.values(adminTabs).forEach(({ button }) => {
+        button.addEventListener('keydown', (event) => {
+            if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+            event.preventDefault();
+            const buttons = Object.values(adminTabs).map((tab) => tab.button);
+            const direction = event.key === 'ArrowRight' ? 1 : -1;
+            const next = (buttons.indexOf(button) + direction + buttons.length) % buttons.length;
+            buttons[next].focus();
+            buttons[next].click();
+        });
+    });
+
+    $('btn-guardar-puntos').addEventListener('click', () => {
+        const points = [...document.querySelectorAll('#formulario-puntos input[type="checkbox"]:checked')].reduce((sum, input) => sum + Number(input.value), 0);
+        if (!points) return alert('Selecciona al menos una recompensa.');
+        sendTransaction(points, 'Ganancia por asistencia', 'btn-guardar-puntos');
+    });
+    $('btn-canjear-puntos').addEventListener('click', () => {
+        const points = Number.parseInt($('input-canje').value, 10);
+        if (!Number.isInteger(points) || points <= 0) return alert('Ingresa una cantidad válida.');
+        sendTransaction(-points, 'Canje en tienda', 'btn-canjear-puntos');
+    });
+    $('btn-manual-puntos').addEventListener('click', () => {
+        const points = Number.parseInt($('input-puntos-manual').value, 10);
+        const concept = $('input-concepto-manual').value.trim();
+        if (!Number.isInteger(points) || points === 0 || !concept) return alert('Ingresa puntos y motivo válidos.');
+        sendTransaction(points, concept, 'btn-manual-puntos');
+    });
+
+    eventControls.form.addEventListener('submit', saveEvent);
+    eventControls.cancel.addEventListener('click', clearEventForm);
+    eventControls.image.addEventListener('change', handleEventImage);
+    eventControls.featured.addEventListener('change', updateFeaturedRequirements);
+    eventControls.removeImage.addEventListener('click', () => {
+        state.eventImageData = null;
+        state.currentEventImage = null;
+        eventControls.image.value = '';
+        showEventImagePreview(null);
+        updateFeaturedRequirements();
+    });
+}
+
+window.addEventListener('error', (event) => console.error('Error de interfaz:', event.error || event.message));
+window.addEventListener('unhandledrejection', (event) => console.error('Promesa rechazada:', event.reason));
+
+document.addEventListener('DOMContentLoaded', async () => {
+    bindEvents();
+    clearEventForm();
+    await loadPublicLanding();
+    await checkSession();
+});
+
+// Se expone únicamente para diagnóstico manual desde la consola.
+window.checkSession = checkSession;

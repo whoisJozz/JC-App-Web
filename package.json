@@ -4,12 +4,11 @@
   "description": "Sistema de Recompensas JC App con MVC y REST",
   "main": "api/index.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "nodemon server.js",
-    "vercel-dev": "vercel dev"
+    "dev": "vercel dev",
+    "deploy": "vercel --prod"
   },
   "engines": {
-    "node": ">=20"
+    "node": "22.x"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",
@@ -22,8 +21,5 @@
     "jsonwebtoken": "^9.0.2",
     "pg": "^8.11.5",
     "xss": "^1.0.15"
-  },
-  "devDependencies": {
-    "nodemon": "^3.1.1"
   }
 }

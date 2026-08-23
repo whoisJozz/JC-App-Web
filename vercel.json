@@ -1,6 +1,10 @@
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
   "version": 2,
+  "framework": null,
+  "outputDirectory": "public",
   "cleanUrls": true,
+  "regions": ["sfo1"],
   "headers": [
     {
       "source": "/(.*)",
@@ -13,7 +17,7 @@
   ],
   "rewrites": [
     {
-      "source": "/api/(.*)",
+      "source": "/api/:path*",
       "destination": "/api"
     }
   ]

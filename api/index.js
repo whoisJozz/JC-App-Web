@@ -24,6 +24,7 @@ const JWT_EXPIRES_IN = '12h';
 const JWT_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 const BCRYPT_ROUNDS = 12;
 const MAX_TRANSACTION_POINTS = 10000;
+const MAX_EVENT_IMAGE_BYTES = 1_500_000;
 const FALLBACK_VERSE = 'Todo lo puedo en Cristo que me fortalece. — Filipenses 4:13';
 
 function normalizeOrigin(value, defaultProtocol = 'https:') {
@@ -95,7 +96,9 @@ function corsOptions(req, callback) {
 app.set('trust proxy', 1);
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors(corsOptions));
-app.use(express.json({ limit: '16kb', strict: true }));
+// Las imágenes del evento estelar llegan como Data URL Base64. El endpoint
+// valida un máximo menor; este límite sólo permite que Express reciba el JSON.
+app.use(express.json({ limit: '3mb', strict: true }));
 app.use(cookieParser());
 
 const generalLimiter = rateLimit({
@@ -209,6 +212,84 @@ function activeValue(value) {
     return value;
 }
 
+// Los campos editoriales del Campamento son opcionales, pero cuando llegan se
+// limpian y se limitan igual que cualquier otro texto controlado por un admin.
+function optionalSanitizedText(value, field, maxLength) {
+    if (value === undefined || value === null || value === '') return null;
+    return sanitizedText(value, field, maxLength, { required: false }) || null;
+}
+
+function eventPhoneValue(value) {
+    const phone = optionalSanitizedText(value, 'Teléfono', 30);
+    if (phone && !/^[0-9+().\-\s]{7,30}$/.test(phone)) {
+        throw new ValidationError('El teléfono sólo puede contener números, espacios y los símbolos + ( ) . -');
+    }
+    return phone;
+}
+
+function eventFeaturedValue(value, { required = false } = {}) {
+    if (value === undefined && !required) return undefined;
+    if (typeof value !== 'boolean') {
+        throw new ValidationError('El indicador de evento estelar no es válido.');
+    }
+    return value;
+}
+
+function imageSignatureMatches(mimeType, bytes) {
+    if (mimeType === 'png') {
+        return bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+    }
+    if (mimeType === 'jpeg') {
+        return bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+    }
+    if (mimeType === 'gif') {
+        const signature = bytes.subarray(0, 6).toString('ascii');
+        return signature === 'GIF87a' || signature === 'GIF89a';
+    }
+    if (mimeType === 'webp') {
+        return bytes.length >= 12 && bytes.subarray(0, 4).toString('ascii') === 'RIFF' && bytes.subarray(8, 12).toString('ascii') === 'WEBP';
+    }
+    return false;
+}
+
+function eventImageValue(value) {
+    if (value === undefined) return undefined;
+    if (value === null || value === '') return null;
+    if (typeof value !== 'string') throw new ValidationError('La imagen no es válida.');
+
+    const match = value.match(/^data:image\/(png|jpeg|webp|gif);base64,([A-Za-z0-9+/]+={0,2})$/);
+    if (!match || match[2].length % 4 !== 0) {
+        throw new ValidationError('La imagen debe ser un archivo PNG, JPEG, WEBP o GIF codificado en Base64.');
+    }
+
+    const bytes = Buffer.from(match[2], 'base64');
+    if (!bytes.length || bytes.length > MAX_EVENT_IMAGE_BYTES) {
+        throw new ValidationError('La imagen no debe superar 1.5 MB.');
+    }
+    if (!imageSignatureMatches(match[1], bytes)) {
+        throw new ValidationError('El contenido de la imagen no coincide con su formato.');
+    }
+
+    return value;
+}
+
+function eventPayload(body, { forUpdate = false } = {}) {
+    const featured = eventFeaturedValue(body.es_estelar);
+    const image = eventImageValue(body.imagen);
+    return {
+        title: sanitizedText(body.titulo, 'Título', 100),
+        date: eventDateValue(body.fecha),
+        cost: optionalSanitizedText(body.costo, 'Costo', 50),
+        slogan: optionalSanitizedText(body.lema, 'Lema', 200),
+        place: optionalSanitizedText(body.lugar, 'Lugar', 200),
+        phone: eventPhoneValue(body.telefono),
+        image,
+        imageProvided: body.imagen !== undefined,
+        featured: featured === undefined && !forUpdate ? false : featured,
+        featuredProvided: body.es_estelar !== undefined
+    };
+}
+
 class ConfigurationError extends Error {}
 class ValidationError extends Error {}
 
@@ -234,7 +315,9 @@ async function ejecutarQuery(queryText, params = []) {
 
     const client = new Client({
         connectionString: process.env.DATABASE_URL,
-        ssl: { rejectUnauthorized: false }
+        ssl: { rejectUnauthorized: false },
+        connectionTimeoutMillis: 10000,
+        query_timeout: 15000
     });
 
     try {
@@ -446,7 +529,20 @@ app.post('/api/login', authLimiter, requireSameOrigin, async (req, res, next) =>
 
 app.post('/api/logout', requireAuth, requireSameOrigin, (req, res) => {
     clearSession(res);
-    return res.status(204).end();
+    return res.json({ success: true });
+});
+
+app.get('/api/health', async (req, res, next) => {
+    try {
+        await ejecutarQuery('SELECT 1');
+        return res.json({
+            status: 'ok',
+            database: 'connected',
+            versesCsv: Boolean(process.env.VERSES_CSV_URL)
+        });
+    } catch (error) {
+        return next(error);
+    }
 });
 
 app.get('/api/auth/me', requireAuth, (req, res) => {
@@ -537,7 +633,10 @@ app.post('/api/usuarios/reset-password', requireAuth, requireAdmin, requireSameO
 app.get('/api/eventos', async (req, res, next) => {
     try {
         const result = await ejecutarQuery(
-            'SELECT id, titulo, fecha FROM eventos WHERE activo = TRUE ORDER BY fecha ASC, id ASC'
+            `SELECT id, titulo, fecha, costo, lema, lugar, telefono, imagen, es_estelar
+             FROM eventos
+             WHERE activo = TRUE
+             ORDER BY es_estelar DESC, fecha ASC, id ASC`
         );
         return res.json({ eventos: result.rows });
     } catch (error) {
@@ -548,7 +647,9 @@ app.get('/api/eventos', async (req, res, next) => {
 app.get('/api/eventos/admin', requireAuth, requireAdmin, async (req, res, next) => {
     try {
         const result = await ejecutarQuery(
-            'SELECT id, titulo, fecha, activo FROM eventos ORDER BY fecha ASC, id ASC'
+            `SELECT id, titulo, fecha, activo, costo, lema, lugar, telefono, imagen, es_estelar
+             FROM eventos
+             ORDER BY es_estelar DESC, fecha ASC, id ASC`
         );
         return res.json({ eventos: result.rows });
     } catch (error) {
@@ -558,11 +659,12 @@ app.get('/api/eventos/admin', requireAuth, requireAdmin, async (req, res, next) 
 
 app.post('/api/eventos', requireAuth, requireAdmin, requireSameOrigin, async (req, res, next) => {
     try {
-        const title = sanitizedText(req.body.titulo, 'Título', 100);
-        const date = eventDateValue(req.body.fecha);
+        const event = eventPayload(req.body);
         const result = await ejecutarQuery(
-            'INSERT INTO eventos (titulo, fecha) VALUES ($1, $2) RETURNING id, titulo, fecha, activo',
-            [title, date]
+            `INSERT INTO eventos (titulo, fecha, costo, lema, lugar, telefono, imagen, es_estelar)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+             RETURNING id, titulo, fecha, activo, costo, lema, lugar, telefono, imagen, es_estelar`,
+            [event.title, event.date, event.cost, event.slogan, event.place, event.phone, event.image || null, event.featured]
         );
         return res.status(201).json({ success: true, evento: result.rows[0] });
     } catch (error) {
@@ -573,15 +675,55 @@ app.post('/api/eventos', requireAuth, requireAdmin, requireSameOrigin, async (re
 app.put('/api/eventos/:id', requireAuth, requireAdmin, requireSameOrigin, async (req, res, next) => {
     try {
         const id = resourceId(req.params.id, 'ID de evento');
-        const title = sanitizedText(req.body.titulo, 'Título', 100);
-        const date = eventDateValue(req.body.fecha);
+        const event = eventPayload(req.body, { forUpdate: true });
         const result = await ejecutarQuery(
-            'UPDATE eventos SET titulo = $1, fecha = $2 WHERE id = $3 RETURNING id, titulo, fecha, activo',
-            [title, date, id]
+            `UPDATE eventos
+             SET titulo = $1,
+                 fecha = $2,
+                 costo = $3,
+                 lema = $4,
+                 lugar = $5,
+                 telefono = $6,
+                 imagen = CASE WHEN $8::boolean THEN $7 ELSE imagen END,
+                 es_estelar = CASE WHEN $10::boolean THEN $9 ELSE es_estelar END
+             WHERE id = $11
+             RETURNING id, titulo, fecha, activo, costo, lema, lugar, telefono, imagen, es_estelar`,
+            [
+                event.title,
+                event.date,
+                event.cost,
+                event.slogan,
+                event.place,
+                event.phone,
+                event.image || null,
+                event.imageProvided,
+                event.featured ?? false,
+                event.featuredProvided,
+                id
+            ]
         );
         if (!result.rows.length) return res.status(404).json({ error: 'Evento no encontrado.' });
 
         return res.json({ success: true, evento: result.rows[0] });
+    } catch (error) {
+        return next(error);
+    }
+});
+
+app.delete('/api/eventos/:id', requireAuth, requireAdmin, requireSameOrigin, async (req, res, next) => {
+    try {
+        const id = resourceId(req.params.id, 'ID de evento');
+        const result = await ejecutarQuery(
+            'DELETE FROM eventos WHERE id = $1 RETURNING id, titulo',
+            [id]
+        );
+        if (!result.rows.length) return res.status(404).json({ error: 'Evento no encontrado.' });
+
+        return res.json({
+            success: true,
+            evento: result.rows[0],
+            mensaje: 'Evento eliminado correctamente.'
+        });
     } catch (error) {
         return next(error);
     }
@@ -592,7 +734,10 @@ app.patch('/api/eventos/:id/estado', requireAuth, requireAdmin, requireSameOrigi
         const id = resourceId(req.params.id, 'ID de evento');
         const active = activeValue(req.body.activo);
         const result = await ejecutarQuery(
-            'UPDATE eventos SET activo = $1 WHERE id = $2 RETURNING id, titulo, fecha, activo',
+            `UPDATE eventos
+             SET activo = $1
+             WHERE id = $2
+             RETURNING id, titulo, fecha, activo, costo, lema, lugar, telefono, imagen, es_estelar`,
             [active, id]
         );
         if (!result.rows.length) return res.status(404).json({ error: 'Evento no encontrado.' });
@@ -634,6 +779,10 @@ app.use((error, req, res, next) => { // eslint-disable-line no-unused-vars
 
     if (error && error.type === 'entity.parse.failed') {
         return res.status(400).json({ error: 'El cuerpo de la solicitud no es JSON válido.' });
+    }
+
+    if (error && error.type === 'entity.too.large') {
+        return res.status(413).json({ error: 'La solicitud es demasiado grande. Reduce el tamaño de la imagen.' });
     }
 
     if (error && error.message === 'Origen no permitido por CORS.') {

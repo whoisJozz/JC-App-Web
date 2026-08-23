@@ -29,11 +29,43 @@ CREATE TABLE IF NOT EXISTS eventos (
     id SERIAL PRIMARY KEY,
     titulo VARCHAR(100) NOT NULL,
     fecha TIMESTAMPTZ NOT NULL,
-    activo BOOLEAN NOT NULL DEFAULT TRUE
+    activo BOOLEAN NOT NULL DEFAULT TRUE,
+    costo VARCHAR(50),
+    lema VARCHAR(200),
+    lugar VARCHAR(200),
+    telefono VARCHAR(30),
+    imagen TEXT,
+    es_estelar BOOLEAN NOT NULL DEFAULT FALSE
 );
+
+-- Compatibilidad con instalaciones existentes: CREATE TABLE IF NOT EXISTS no
+-- agrega columnas a una tabla ya creada, por eso esta migración es explícita.
+ALTER TABLE eventos ADD COLUMN IF NOT EXISTS costo VARCHAR(50);
+ALTER TABLE eventos ADD COLUMN IF NOT EXISTS lema VARCHAR(200);
+ALTER TABLE eventos ADD COLUMN IF NOT EXISTS lugar VARCHAR(200);
+ALTER TABLE eventos ADD COLUMN IF NOT EXISTS telefono VARCHAR(30);
+ALTER TABLE eventos ADD COLUMN IF NOT EXISTS imagen TEXT;
+ALTER TABLE eventos ADD COLUMN IF NOT EXISTS es_estelar BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- Conserva los datos existentes y, si aún no hay evento estelar, promueve el
+-- próximo registro cuyo título contenga "campamento".
+UPDATE eventos
+SET es_estelar = TRUE
+WHERE id = (
+    SELECT id
+    FROM eventos
+    WHERE titulo ILIKE '%campamento%'
+    ORDER BY (fecha >= NOW()) DESC, fecha ASC, id ASC
+    LIMIT 1
+)
+AND NOT EXISTS (SELECT 1 FROM eventos WHERE es_estelar = TRUE);
 
 CREATE INDEX IF NOT EXISTS idx_eventos_activo_fecha
 ON eventos (activo, fecha);
+
+CREATE INDEX IF NOT EXISTS idx_eventos_estelar
+ON eventos (es_estelar)
+WHERE es_estelar = TRUE;
 
 -- 4. Insertar a los Administradores (General y Staff Dividido).
 -- Cambia estas contraseñas iniciales inmediatamente después del primer despliegue.
